@@ -42,9 +42,9 @@ A successful project will deliver a complete pipeline and report demonstrating:
 
 # TODOs:
 - [ ] Basic Pipeline @ Licheng
-    - [ ] Dataset Prepare
-    - [ ] Hunyuan3D 2.0
-    - [ ] Trellis3D
+    - [x] Dataset Prepare
+    - [x] Hunyuan3D 2.0
+    - [x] Trellis3D
 
 - [ ] Gradio Website
 

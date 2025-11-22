@@ -14,7 +14,7 @@ pipeline = TrellisImageTo3DPipeline.from_pretrained("microsoft/TRELLIS-image-lar
 pipeline.cuda()
 
 # Load an image
-image = Image.open("assets/example_image/T.png")
+image = Image.open("/disk2/licheng/code/ARIN5201-CV-FinalProject/TRELLIS/assets/example_image/T.png")
 
 # Run the pipeline
 outputs = pipeline.run(
@@ -36,10 +36,10 @@ outputs = pipeline.run(
 # - outputs['mesh']: a list of meshes
 
 # Render the outputs
-video = render_utils.render_video(outputs['gaussian'][0])['color']
-imageio.mimsave("sample_gs.mp4", video, fps=30)
-video = render_utils.render_video(outputs['radiance_field'][0])['color']
-imageio.mimsave("sample_rf.mp4", video, fps=30)
+# video = render_utils.render_video(outputs['gaussian'][0])['color']
+# imageio.mimsave("sample_gs.mp4", video, fps=30)
+# video = render_utils.render_video(outputs['radiance_field'][0])['color']
+# imageio.mimsave("sample_rf.mp4", video, fps=30)
 video = render_utils.render_video(outputs['mesh'][0])['normal']
 imageio.mimsave("sample_mesh.mp4", video, fps=30)
 
