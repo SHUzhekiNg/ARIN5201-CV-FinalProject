@@ -1,0 +1,378 @@
+
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>图 / 文 生 3D 推理面板</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #121212;
+      --fg: #eee;
+      --muted: #aaa;
+      --panel: #1a1a1a;
+      --border: #2a2a2a;
+      --btn: #2a2a2a;
+      --btn-border: #3a3a3a;
+      --link: #8ab4f8;
+      --accent: #4caf50;
+      
+    }
+    html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
+
+    /* 重点：提高层级，避免被覆盖；且始终可点 */
+    header {
+      position: sticky; top: 0; z-index: 1000;
+      padding: 12px 16px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 12px; background: var(--bg);
+    }
+    header h1 { font-size: 18px; margin: 0; }
+    header a { color: var(--link); text-decoration: none; }
+    header .header-switch {
+      padding: 6px 10px; border: 1px solid var(--btn-border); border-radius: 6px; background: var(--btn);
+      color: var(--fg); text-decoration: none; cursor: pointer; transition: opacity .2s ease;
+    }
+    /* 禁用态：可见但不可点（阻止点击事件） */
+    .header-switch[aria-disabled="true"] {
+      opacity: .5; pointer-events: none; cursor: not-allowed;
+    }
+
+    main { display: grid; grid-template-columns: 420px 1fr 420px; gap: 12px; padding: 12px; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+    .card .hd { padding: 10px 12px; border-bottom: 1px solid var(--border); font-weight: 600; }
+    .card .bd { padding: 12px; }
+    .row { display: grid; grid-template-columns: 140px 1fr; align-items: center; gap: 8px; margin-bottom: 10px; }
+    input[type="text"], input[type="number"], input[type="file"], select, textarea {
+      width: 100%; background: #181818; border: 1px solid var(--border); color: var(--fg);
+      border-radius: 6px; padding: 8px; outline: none;
+    }
+    textarea { min-height: 80px; }
+    .btn { padding: 8px 12px; background: var(--btn); border: 1px solid var(--btn-border); border-radius: 6px; color: var(--fg); cursor: pointer; }
+    .btn[disabled] { opacity: .6; cursor: not-allowed; }
+    .btn + .btn { margin-left: 8px; }
+    .muted { color: var(--muted); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+    #progressBar { height: 8px; background: #222; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+    #progressBar > div { height: 100%; width: 0%; background: var(--accent); transition: width .25s ease; }
+    #log { height: 320px; overflow: auto; white-space: pre-wrap; font-size: 12px; background: #0f0f0f; border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
+    #results a { color: var(--link); }
+    .kv div { margin: 4px 0; }
+    .kv span { display: inline-block; min-width: 96px; color: var(--muted); }
+    footer { padding: 10px 16px; border-top: 1px solid var(--border); color: var(--muted); }
+  </style>
+</head>
+<body>
+    <header>
+    <h1>Easy 3D Generation</h1>
+    <span id="statusText" class="muted">Status: idle</span>
+    <span style="flex:1"></span>
+    <!-- 始终可见；创建 job 后立刻可点 -->
+    <a id="btnSwitchViewerHeader" class="button" href="/view" aria-disabled="false">Go for 3D Viewer</a>
+  </header>
+
+  <main>
+    <!-- 左：参数与启动 -->
+    <section class="card">
+      <div class="hd">Input and Parameterss</div>
+      <div class="bd">
+        <form id="formStart">
+          <div class="row">
+            <label>Model</label>
+            <select name="model" id="model">
+              <option value="hunyuan3d-2">Hunyuan3D v2.0</option>
+              <option value="trellis">Trellis</option>
+            </select>
+          </div>
+
+          <div class="row">
+            <label>GPU</label>
+            <input type="text" name="gpu" id="gpu" placeholder="e.g. 0 或 0,1" value="0" />
+          </div>
+
+          <div class="row">
+            <label>Output Dir</label>
+            <input type="text" name="output_dir" id="output_dir" placeholder="/disk2/licheng/code/ARIN5201-CV-FinalProject/outputs" />
+          </div>
+
+          <div class="row">
+            <label>Image</label>
+            <input type="file" name="image" id="image" accept=".png,.jpg,.jpeg,.webp" />
+          </div>
+          <div class="muted" style="margin: -6px 0 10px 148px;">Drag or select a image to upload. The image-based generation will keep a higher priority than text prompt.</div>
+
+          <div class="row">
+            <label>Text Prompt</label>
+            <textarea name="prompt" id="prompt" placeholder="Describe anything you want to generate."></textarea>
+          </div>
+
+          <!-- Trellis 额外参数（可选） -->
+          <div id="trellisParams">
+            <div class="row">
+              <label>Model ID</label>
+              <input type="text" name="trellis_model" id="trellis_model" value="microsoft/TRELLIS-image-large" />
+            </div>
+            <div class="row">
+              <label>Render Target</label>
+              <select name="render_target" id="render_target">
+                <option value="mesh">mesh</option>
+                <option value="gaussian">gaussian</option>
+                <option value="radiance_field">radiance_field</option>
+              </select>
+            </div>
+            <div class="row">
+              <label>Render Channel</label>
+              <select name="render_channel" id="render_channel">
+                <option value="normal">normal</option>
+                <option value="color">color</option>
+              </select>
+            </div>
+            <div class="row">
+              <label>spconv algorithm</label>
+              <select name="spconv_algo" id="spconv_algo">
+                <option value="native">native</option>
+                <option value="auto">auto</option>
+              </select>
+            </div>
+            <div class="row">
+              <label>Texture Size</label>
+              <input type="number" name="texture_size" id="texture_size" value="1024" min="256" step="256" />
+            </div>
+            <div class="row">
+              <label>Simplify Ratio</label>
+              <input type="number" name="simplify_ratio" id="simplify_ratio" value="0.95" min="0" max="1" step="0.01" />
+            </div>
+          </div>
+
+          <div style="margin-top:14px">
+            <button type="submit" class="btn" id="btnStart">Start</button>
+            <button type="button" class="btn" id="btnReset">Reset</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- 中：进度与日志 -->
+    <section class="card">
+      <div class="hd">Progressing and Log</div>
+      <div class="bd">
+        <div class="row">
+          <label>Work ID</label>
+          <div class="mono" id="jobIdBox">—</div>
+        </div>
+        <div id="progressBar" style="margin-bottom:10px">
+          <div id="progressFill"></div>
+        </div>
+        <div class="muted" style="margin-bottom:10px">Real Time Log(SSE)</div>
+        <div id="log" class="mono"></div>
+      </div>
+    </section>
+
+    <!-- 右：结果与切换 -->
+    <section class="card">
+      <div class="hd">Result File / View the Result</div>
+      <div class="bd">
+        <div id="results">
+          <div class="kv mono" style="margin-bottom:12px">
+            <div><span>Model</span><span id="kvModel">—</span></div>
+            <div><span>GPU</span><span id="kvGpu">—</span></div>
+            <div><span>Status</span><span id="kvStatus">idle</span></div>
+            <div><span>Progress</span><span id="kvProgress">0%</span></div>
+          </div>
+
+          <!-- 面板内切换按钮（和右上角一致） -->
+          <a id="btnSwitchViewer" class="btn" href="/view" aria-disabled="false">Go to 3D Viewer</a>
+
+          <div id="artifactList" style="margin-top:12px"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    Connected: Flask Server(/start, /logs/&lt;job_id&gt;, /status/&lt;job_id&gt;, /download/&lt;job_id&gt;/&lt;kind&gt;)
+  </footer>
+
+  <script>
+    let currentJobId = null;
+    let evtSrc = null;
+    let lastArtifacts = null;
+
+    const modelSel = document.getElementById('model');
+    const trellisParams = document.getElementById('trellisParams');
+    function syncParamVisibility() {
+      trellisParams.style.display = (modelSel.value === 'trellis') ? 'block' : 'none';
+    }
+    modelSel.addEventListener('change', syncParamVisibility);
+    syncParamVisibility();
+
+    const headerSwitch = document.getElementById('btnSwitchViewerHeader');
+    const panelSwitch  = document.getElementById('btnSwitchViewer');
+
+    // 统一设置链接启用/禁用
+    function setSwitchLinks(url, enabled) {
+      [headerSwitch, panelSwitch].forEach(a => {
+        if (!a) return;
+        if (url) a.href = url;
+        a.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+        // target 同步（header 不开新窗，panel 开新窗）
+        if (a === panelSwitch) a.target = '_blank';
+        if (a === headerSwitch) a.target = '_self';
+      });
+    }
+
+    // 确保点击一定会导航（有时浏览器/样式会阻止默认跳转）
+    if (headerSwitch) {
+      headerSwitch.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (headerSwitch.getAttribute('aria-disabled') === 'true') return;
+        window.location.href = headerSwitch.href;
+      });
+    }
+    if (panelSwitch) {
+      panelSwitch.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (panelSwitch.getAttribute('aria-disabled') === 'true') return;
+        window.open(panelSwitch.href, '_blank');
+      });
+    }
+
+    // 重置
+    document.getElementById('btnReset').addEventListener('click', () => {
+      document.getElementById('formStart').reset();
+      syncParamVisibility();
+      setStatus('idle');
+      setProgress(0);
+      setJobId('—');
+      document.getElementById('log').textContent = '';
+      document.getElementById('artifactList').innerHTML = '';
+      lastArtifacts = null;
+      setSwitchLinks('/view', true);
+    });
+
+    // 发起任务
+    document.getElementById('formStart').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (evtSrc) { evtSrc.close(); evtSrc = null; }
+
+      const fd = new FormData(e.target);
+      const model = fd.get('model');
+      const gpu = fd.get('gpu');
+
+      setStatus('running');
+      setProgress(0);
+      document.getElementById('kvModel').textContent = model || '—';
+      document.getElementById('kvGpu').textContent = gpu || '—';
+
+      try {
+        const resp = await fetch('/start', { method: 'POST', body: fd });
+        if (!resp.ok) throw new Error(await resp.text());
+        const data = await resp.json();
+        currentJobId = data.job_id;
+        setJobId(currentJobId);
+        attachSSE(currentJobId);
+
+        // 立即让两个“切换到 3D 预览”按钮可用
+        const waitingUrl = `/view/${currentJobId}`;
+        setSwitchLinks(waitingUrl, true);  // 可点
+      } catch (err) {
+        appendLog(`ERROR /start: ${err}`);
+        setStatus('error');
+        setSwitchLinks('/view', true);
+      }
+    });
+
+    // 连接 SSE
+    function attachSSE(jobId) {
+      if (evtSrc) { evtSrc.close(); }
+      evtSrc = new EventSource(`/logs/${jobId}`);
+      appendLog(`SSE connected: /logs/${jobId}`);
+
+      evtSrc.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+
+          if (msg.type === 'log') {
+            appendLog(msg.line);
+          } else if (msg.type === 'progress') {
+            setProgress(msg.value);
+          } else if (msg.type === 'status') {
+            setStatus(msg.value);
+          } else if (msg.type === 'result') {
+            lastArtifacts = msg.artifacts || {};
+            renderArtifacts(lastArtifacts);
+
+            // 找到 GLB，更新链接并自动跳转
+            const glbKind = findGlbKind(lastArtifacts);
+            if (glbKind) {
+              const url = `/view/${jobId}?kind=${encodeURIComponent(glbKind)}`;
+              setSwitchLinks(url, true);
+              // 自动在新标签页打开预览，保留当前页面的 SSE 连接
+              try {
+                window.open(url, '_blank');
+              } catch (e) {
+                // fallback to same-window if popups blocked
+                window.location.href = url;
+              }
+            }
+          }
+        } catch (_) { /* 忽略心跳或非 JSON 行 */ }
+      };
+
+      evtSrc.onerror = () => {
+        appendLog('SSE error.');
+      };
+    }
+
+    // 工具函数
+    function setJobId(id) {
+      document.getElementById('jobIdBox').textContent = id;
+      document.getElementById('statusText').textContent = `Status: ${document.getElementById('kvStatus').textContent}`;
+    }
+    function setStatus(s) {
+      document.getElementById('kvStatus').textContent = s;
+      document.getElementById('statusText').textContent = `Status: ${s}`;
+    }
+    function setProgress(v) {
+      const pct = Math.max(0, Math.min(100, Number(v) || 0));
+      document.getElementById('kvProgress').textContent = `${pct}%`;
+      document.getElementById('progressFill').style.width = `${pct}%`;
+    }
+    function appendLog(line) {
+      const el = document.getElementById('log');
+      el.textContent += (line.endsWith('\n') ? line : (line + '\n'));
+      el.scrollTop = el.scrollHeight;
+    }
+    function renderArtifacts(artifacts) {
+      const box = document.getElementById('artifactList');
+      box.innerHTML = '';
+      const entries = Object.entries(artifacts || {});
+      if (!entries.length) {
+        box.innerHTML = '<div class="muted">暂无结果文件</div>';
+        return;
+      }
+      const ul = document.createElement('ul');
+      for (const [k, v] of entries) {
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        a.textContent = `${k} → 下载`;
+        a.href = `/download/${currentJobId}/${encodeURIComponent(k)}`;
+        a.target = '_blank';
+        li.appendChild(a);
+        li.appendChild(document.createTextNode('  '));
+        const pathSpan = document.createElement('span');
+        pathSpan.className = 'muted mono';
+        pathSpan.textContent = String(v);
+        li.appendChild(pathSpan);
+        ul.appendChild(li);
+      }
+      box.appendChild(ul);
+    }
+    function findGlbKind(artifacts) {
+      for (const [k, v] of Object.entries(artifacts || {})) {
+        if (String(v).toLowerCase().endsWith('.glb')) return k;
+      }
+      return null;
+    }
+  </script>
+</body>
+</html>

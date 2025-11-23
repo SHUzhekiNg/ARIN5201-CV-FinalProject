@@ -1,0 +1,138 @@
+<!-- templates/viewer.html -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>3D File Viewer{{ job.id }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <!-- model-viewer：支持 glTF/GLB、PBR、相机控制等 -->
+    <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+
+    <style>
+      html, body { height: 100%; margin: 0; background: #121212; color: #eee; }
+        header {
+            padding: 10px 16px;
+            border-bottom: 1px solid #2a2a2a;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        header a { color: #8ab4f8; text-decoration: none; }
+        .viewer-wrap { height: calc(100% - 56px); display: grid; grid-template-columns: 1fr 320px; gap:0; }
+        .viewer-left { padding: 12px; display:flex; align-items:center; justify-content:center; height:100%; }
+        .panel { padding: 12px 16px; border-left: 1px solid #2a2a2a; overflow: auto; }
+        .square { width:100%; height:100%; display:flex; align-items:center; justify-content:center; }
+        .frame { width:100%; max-width:100%; max-height:100%; aspect-ratio:1 / 1; }
+        model-viewer { width: 100%; height:100%; background: #1a1a1a; border-radius:8px; display:block; }
+        .btn { padding: 8px 12px; background: #2a2a2a; border: 1px solid #3a3a3a; border-radius: 6px; color: #eee; cursor: pointer; }
+        .btn + .btn { margin-left: 8px; }
+        .kv { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+        .kv div { margin: 6px 0; }
+        .kv span { display: inline-block; min-width: 96px; color: #bbb; }
+        .hint { color:#aaa; margin:10px 0 10px 0; line-height:1.25; }
+        .controls .btn { margin-right:8px; }
+        .userInput {height: 100%;}
+    </style>
+</head>
+
+<body>
+  <header>
+    <strong>3D File Viewer</strong>
+    <span style="flex:1"></span>
+    <a href="/" style="color:#8ab4f8; text-decoration:none;">← Back to Inference</a>
+  </header>
+
+
+<div class="viewer-wrap">
+  {% if waiting %}
+  <div style="padding:28px; width:100%">
+    <h2 style="color:#ddd">Upload GLB File and Visualize</h2>
+    <form action="/view/upload" method="post" enctype="multipart/form-data">
+      <div style="margin:12px 0">
+        <input type="file" name="glb" accept=".glb" />
+      </div>
+      <div>
+        <button class="btn" type="submit">Upload</button>
+      </div>
+    </form>
+    <p style="color:#999; margin-top:12px">Or you can view an output of previous work by URL  <code>/view/&lt;job_id&gt;</code>.</p>
+  </div>
+  {% else %}
+  <div class="viewer-left">
+    <div class="square">
+      <div class="frame">
+        <model-viewer id="mv"
+          src="{{ glb_url }}"
+          camera-controls
+          interaction-prompt="auto"
+          exposure="0.9"
+          tone-mapping="ACES"
+          shadow-intensity="0.6"
+          environment-image="https://modelviewer.dev/shared-assets/environments/neutral.hdr"></model-viewer>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="kv">
+      <div><span>Work ID</span>{% if job %}{{ job.id }}{% else %}-{% endif %}</div>
+      <div><span>Model</span>{% if job %}{{ job.model }}{% else %}-{% endif %}</div>
+      <div><span>GPU</span>{% if job %}{{ job.gpu }}{% else %}-{% endif %}</div>
+      <div><span>Type of File</span>{{ kind or '-' }}</div>
+      <div><span>Download</span>{% if glb_url %}<a href="{{ glb_url }}">Download GLB</a>{% else %}-{% endif %}</div>
+    </div>
+
+    <h3>How to Operate</h3>
+    <p class="hint"><span>Tips: hold left mouse to rotate, middle to pan, wheel to zoom.</span></p>
+
+    <div class="controls" style="margin-bottom:12px">
+      <button class="btn" id="btnWire">WireBox</button>
+      <button class="btn" id="btnReset">Reset the Camera</button>
+      <button class="btn" id="btnScreenshot">ScreenShot</button>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+
+  <script type="module">
+    const mv = document.getElementById('mv');
+    if (mv) {
+      // 线框开关（通过 scene-graph 操作）
+      let wireframeOn = false;
+      const btnWire = document.getElementById('btnWire');
+      if (btnWire) btnWire.addEventListener('click', async () => {
+        await mv.updateComplete; // 确保加载完成
+        const scene = mv.scene;
+        if (!scene) return;
+        wireframeOn = !wireframeOn;
+        for (const mesh of scene.model?.meshes || []) {
+          const mat = mesh.material;
+          if (mat) mat.wireframe = wireframeOn;
+        }
+      });
+
+      // 重置相机
+      const btnReset = document.getElementById('btnReset');
+      if (btnReset) btnReset.addEventListener('click', () => {
+        mv.resetTurntableRotation();
+        mv.cameraOrbit = "auto auto auto";
+        mv.fieldOfView = "auto";
+      });
+
+      // 简单截图：使用 <model-viewer> 的 toBlob
+      const btnScreenshot = document.getElementById('btnScreenshot');
+      if (btnScreenshot) btnScreenshot.addEventListener('click', async () => {
+        const blob = await mv.toBlob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `{{ job.id if job else 'capture' }}.png`;
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+    }
+  </script>
+</body>
+</html>

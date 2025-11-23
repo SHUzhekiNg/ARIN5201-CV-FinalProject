@@ -44,19 +44,88 @@ def ensure_dir(path: Path):
     return path
 
 
+def analyze_glb(path: str) -> Dict[str, Any]:
+    """Lightweight GLB inspector: returns buffer and image counts/sizes.
+
+    Reads GLB header, parses JSON chunk and inspects `buffers` and `images` entries.
+    This mirrors the controller's analyzer so worker logs include the same diagnostics.
+    """
+    import struct
+    import json as _json
+    import base64
+
+    info: Dict[str, Any] = {"buffers": [], "images": [], "meshes": 0}
+    try:
+        with open(path, 'rb') as f:
+            data = f.read()
+        if len(data) < 12:
+            return {"error": "file too small"}
+        magic, version, length = struct.unpack_from('<4sII', data, 0)
+        if magic != b'glTF':
+            return {"error": "not glb"}
+        offset = 12
+        json_chunk = None
+        bin_chunk = None
+        while offset + 8 <= len(data):
+            chunk_len, chunk_type = struct.unpack_from('<I4s', data, offset)
+            offset += 8
+            chunk_data = data[offset: offset + chunk_len]
+            offset += chunk_len
+            if chunk_type == b'JSON':
+                try:
+                    json_chunk = _json.loads(chunk_data.decode('utf-8'))
+                except Exception:
+                    json_chunk = None
+            elif chunk_type == b'BIN\x00':
+                bin_chunk = chunk_data
+
+        if json_chunk is None:
+            return {"error": "no json chunk"}
+
+        for b in json_chunk.get('buffers', []):
+            blen = b.get('byteLength')
+            info['buffers'].append({'byteLength': blen})
+
+        for im in json_chunk.get('images', []):
+            uri = im.get('uri')
+            if not uri:
+                info['images'].append({'uri': None, 'note': 'bufferView'})
+            elif uri.startswith('data:'):
+                try:
+                    header, b64 = uri.split(',', 1)
+                    raw = base64.b64decode(b64)
+                    info['images'].append({'uri': 'data', 'size': len(raw)})
+                except Exception:
+                    info['images'].append({'uri': 'data', 'size': None})
+            else:
+                info['images'].append({'uri': uri, 'size': None})
+
+        info['meshes'] = len(json_chunk.get('meshes', []))
+        return info
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # -----------------------------
 # TRELLIS inline runner
 # -----------------------------
 
+
 def run_trellis_inline(
-    image_path: str,
+    prompt: str,
     output_dir: str,
     seed: int = 1,
     trellis_model: str = "microsoft/TRELLIS-image-large",
-    render_target: str = "mesh",        # 'gaussian' | 'radiance_field' | 'mesh'
-    render_channel: str = "normal",     # 'color' | 'normal'
-    attn_backend: Optional[str] = None, # 'flash-attn' | 'xformers' | None
-    spconv_algo: str = "native",        # 'native' | 'auto'
+    # 新增：文本/图像输入选择，与 Hunyuan3D-2 保持一致
+    input_type: str = "image",
+    # 新增：文生图模型（优先使用本地 Diffusers 管线目录）
+    t2i_model: str = "/disk2/licheng/models/HunyuanDiT-v1.1-Diffusers-Distilled",
+    # 新增：可选去背景，保持与 Hunyuan3D-2 一致
+    do_rembg_if_rgb: bool = True,
+    render_target: str = "mesh",  # 'gaussian' | 'radiance_field' | 'mesh'
+    render_channel: str = "normal",  # 'color' | 'normal'
+    attn_backend: Optional[str] = None,  # 'flash-attn' | 'xformers' | None
+    spconv_algo: str = "native",  # 'native' | 'auto'
     sparse_structure_steps: Optional[int] = None,
     sparse_structure_cfg: Optional[float] = None,
     slat_steps: Optional[int] = None,
@@ -64,33 +133,93 @@ def run_trellis_inline(
     texture_size: int = 1024,
     simplify_ratio: float = 0.95,
     cuda_visible_devices: Optional[str] = None,
-    render_video: bool = False, 
+    render_video: bool = False,
 ) -> Dict[str, Any]:
     """
-    Execute TRELLIS inference inside the current Python process (assumes trellis env).
-    Returns dict with output file paths.
+    TRELLIS inference: supports image-to-3D or text-to-3D (Text→Image→3D).
     """
     # Env controls
     if cuda_visible_devices is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(cuda_visible_devices)
     if attn_backend:
-        os.environ['ATTN_BACKEND'] = attn_backend
-    os.environ['SPCONV_ALGO'] = spconv_algo
-    os.environ['NVDIFRAST_USE_EGL'] = '1'
+        os.environ["ATTN_BACKEND"] = attn_backend
+    os.environ["SPCONV_ALGO"] = spconv_algo
+    os.environ["NVDIFRAST_USE_EGL"] = "1"
 
-    # Optional: silence noisy warnings (xFormers availability)
     import warnings
     warnings.filterwarnings("ignore", message="xFormers is available")
 
+    from pathlib import Path  # 提前导入，避免未定义 Path 的错误
     import sys
-    sys.path.insert(0, "/disk2/licheng/code/ARIN5201-CV-FinalProject/TRELLIS")
-
+    import torch
     from PIL import Image
+
+    # trellis
+    sys.path.insert(0, "/disk2/licheng/code/ARIN5201-CV-FinalProject/TRELLIS")
     from trellis.pipelines import TrellisImageTo3DPipeline
     from trellis.utils import postprocessing_utils
 
+    # 使用同一套 rembg 以与 Hunyuan3D-2 保持一致
+    try:
+        from hy3dgen.rembg import BackgroundRemover
+    except Exception:
+        # 在某些环境（例如只安装了 TRELLIS 的虚拟环境）可能没有 hy3dgen 包。
+        # 为了兼容性，提供一个轻量回退实现 —— 不做去背景，只返回原图。
+        class BackgroundRemover:
+            def __init__(self):
+                pass
+            def __call__(self, img):
+                # 返回原始 PIL.Image，不做处理
+                return img
+        log("[WARN] hy3dgen.rembg not available in this environment; background removal disabled.")
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    bg = BackgroundRemover()
     out_dir = ensure_dir(Path(output_dir))
-    stem = Path(image_path).stem
+
+    # ---- 统一输入处理：支持 image / text，与 Hunyuan3D-2 保持一致 ----
+    image = None
+    if input_type.lower() == "image":
+        stem = Path(prompt).stem
+        log(f"Reading image: {prompt}")
+        image = Image.open(prompt)
+        if image.mode == "RGB" and do_rembg_if_rgb:
+            log("Running background remover (image is RGB)...")
+            image = bg(image)
+    elif input_type.lower() == "text":
+        prompt = prompt.strip()
+        if not prompt:
+            raise ValueError("Empty text prompt for TRELLIS.")
+        # 文生图：优先本地 Diffusers 管线目录（含 model_index.json）
+        t2i_dir = Path(t2i_model)
+        use_local = t2i_dir.is_dir() and (t2i_dir / "model_index.json").exists()
+        log(f"[T2I] Using {'local' if use_local else 'remote'} HunyuanDiT-v1.1-Distilled for text→image (TRELLIS).")
+        from diffusers import HunyuanDiTPipeline
+        if use_local:
+            pipe = HunyuanDiTPipeline.from_pretrained(
+                str(t2i_dir), torch_dtype=torch.float16, local_files_only=True
+            ).to(device)
+        else:
+            pipe = HunyuanDiTPipeline.from_pretrained(
+                "Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled",
+                torch_dtype=torch.float16
+            ).to(device)
+        log(f"[T2I] Generating image for prompt: '{prompt}'")
+        image_t2i = pipe(prompt).images[0]  # PIL RGB
+        if image_t2i.mode == "RGB" and do_rembg_if_rgb:
+            log("[T2I] Running background remover on generated RGB image...")
+            image_t2i = bg(image_t2i)
+        image = image_t2i  # TRELLIS 原始读取为 PIL.Image
+        stem = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in prompt)[:40] or uuid.uuid4().hex[:8]
+        t2i_png = out_dir / "temp.png"
+        try:
+            image.save(str(t2i_png))
+            log(f"[T2I] Saved generated image: {t2i_png}")
+        except Exception as e:
+            log(f"[T2I] Save temp.png failed: {e}")
+    else:
+        raise ValueError("input_type must be 'image' or 'text'.")
+
     glb_path = out_dir / f"{stem}_trellis.glb"
     mp4_path = out_dir / f"{stem}_trellis_{render_target}.mp4"
     ply_path = out_dir / f"{stem}_trellis_gs.ply"
@@ -98,9 +227,6 @@ def run_trellis_inline(
     log("Loading TRELLIS pipeline...")
     pipeline = TrellisImageTo3DPipeline.from_pretrained(trellis_model)
     pipeline.cuda()
-
-    log(f"Reading image: {image_path}")
-    image = Image.open(image_path)
 
     # Always pass dicts (avoid NoneType merging inside Trellis)
     sparse_structure_sampler_params: Dict[str, Any] = {}
@@ -122,12 +248,11 @@ def run_trellis_inline(
         sparse_structure_sampler_params=sparse_structure_sampler_params,
         slat_sampler_params=slat_sampler_params,
     )
-    # outputs: 'gaussian', 'radiance_field', 'mesh'
 
+    # outputs: 'gaussian', 'radiance_field', 'mesh'
     if render_video:
         try:
-            # 远程服务器常无显示服务，EGL 模式更稳
-            os.environ['NVDIFRAST_USE_EGL'] = '1'
+            os.environ["NVDIFRAST_USE_EGL"] = "1"
             from trellis.utils import render_utils
             log(f"Rendering {render_target} video ({render_channel})...")
             if render_target not in outputs:
@@ -141,27 +266,65 @@ def run_trellis_inline(
 
     log("Exporting GLB...")
     glb = postprocessing_utils.to_glb(
-        outputs['gaussian'][0],
-        outputs['mesh'][0],
+        outputs["gaussian"][0],
+        outputs["mesh"][0],
         simplify=simplify_ratio,
         texture_size=texture_size,
     )
-    glb.export(str(glb_path))
+    # Try to force embedded images when exporter supports it; fall back to default export.
+    try:
+        # common variants: embed_images, embed
+        try:
+            glb.export(str(glb_path), embed_images=True)
+        except TypeError:
+            try:
+                glb.export(str(glb_path), embed=True)
+            except TypeError:
+                glb.export(str(glb_path))
+    except Exception as e:
+        log(f"[WARN] glb.export with embed args failed: {e}; falling back to default export.")
+        glb.export(str(glb_path))
+
+    # Analyze exported GLB for debugging parity issues
+    try:
+        analysis = analyze_glb(str(glb_path))
+        log(f"GLB analysis (trellis): {analysis}")
+    except Exception as e:
+        log(f"GLB analysis failed: {e}")
 
     log("Saving Gaussian PLY...")
-    outputs['gaussian'][0].save_ply(str(ply_path))
+    outputs["gaussian"][0].save_ply(str(ply_path))
 
     artifacts = {
         "glb": str(glb_path),
         "ply": str(ply_path),
     }
-    if render_video and mp4_path is not None:
-        artifacts["mp4"] = str(mp4_path)
+    # 文本入口时，附带 t2i 结果
+    if input_type.lower() == "text":
+        png_guess = out_dir / "temp.png"
+        if png_guess.exists():
+            artifacts["t2i_image"] = str(png_guess)
+
+    log("Done.")
+
+    # include artifact sizes and analysis in result to help controller compare runs
+    try:
+        art_sizes = {}
+        if glb_path.exists():
+            art_sizes['glb'] = glb_path.stat().st_size
+        if ply_path.exists():
+            art_sizes['ply'] = ply_path.stat().st_size
+        result['artifact_sizes'] = art_sizes
+        if 'analysis' in locals():
+            result['glb_analysis'] = analysis
+    except Exception:
+        pass
 
     result = {
         "backend": "trellis",
         "inputs": {
-            "image_path": str(image_path),
+            "input": str(prompt),
+            "input_type": input_type,
             "seed": seed,
         },
         "artifacts": artifacts,
@@ -176,7 +339,9 @@ def run_trellis_inline(
             "slat_sampler_params": slat_sampler_params,
             "cuda_visible_devices": cuda_visible_devices,
             "render_video": render_video,
-        }
+            "t2i_model": t2i_model,
+            "do_rembg_if_rgb": do_rembg_if_rgb,
+        },
     }
     return result
 
@@ -185,92 +350,176 @@ def run_trellis_inline(
 # Hunyuan3D-2 inline runner
 # -----------------------------
 def run_hunyuan3d2_inline(
-    image_path: str,
+    prompt: str,                             
     output_dir: str,
     model_path: str,
+    input_type: str = "image",               
     do_rembg_if_rgb: bool = True,
-    repo_dir: Optional[str] = None,        # repo root (contains 'hy3dgen' directory)
+    repo_dir: Optional[str] = None,          
     cuda_visible_devices: Optional[str] = None,
+    # 文生图模型目录：若是本地 Diffusers 管线目录（含 model_index.json）将优先使用；否则回落到官方 repo_id
+    t2i_model: str = "/disk2/licheng/models/HunyuanDiT-v1.1-Diffusers-Distilled",
+    seed: int = 1234,
+    octree_resolution: Optional[int] = None,
+    num_inference_steps: Optional[int] = None,
+    guidance_scale: Optional[float] = None,
+    mc_algo: str = "mc",
 ) -> Dict[str, Any]:
     """
-    Execute Hunyuan3D-2 inference inside current Python process (assumes hunyuan3d2 env).
-    Returns dict with output file paths.
+    Hunyuan3D-2 inference: supports image-to-3D or text-to-3D (Text→Image→3D).
     """
-
+    from pathlib import Path
     # Env controls
     if cuda_visible_devices is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(cuda_visible_devices)
 
-    # Fallback: inject repo_dir into sys.path before importing hy3dgen
+    # 仓库路径兜底
     if repo_dir:
-        if not Path(repo_dir).exists():
+        p = Path(repo_dir)
+        if not p.exists():
             raise FileNotFoundError(f"repo_dir does not exist: {repo_dir}")
         if repo_dir not in sys.path:
             sys.path.insert(0, repo_dir)
 
-    # Proper import: hy3dgen is top-level package in the repo
+    # 正常导入 hy3dgen
+    import torch
     from PIL import Image
     from hy3dgen.rembg import BackgroundRemover
     from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
     from hy3dgen.texgen import Hunyuan3DPaintPipeline
 
-    # Strong validation for local model path structure
-    root = Path(model_path)  # e.g., /disk2/licheng/models/Hunyuan3D-2/
+    # 检查模型目录结构（3D 权重）
+    root = Path(model_path)
     dit_ckpt = root / "hunyuan3d-dit-v2-0" / "model.fp16.safetensors"
     paint_dir = root / "hunyuan3d-paint-v2-0"
     if not dit_ckpt.exists():
-        raise FileNotFoundError(
-            f"[Hunyuan3D-2] Missing shape-generation checkpoint: {dit_ckpt}\n"
-            f"Expected file at: {dit_ckpt}\n"
-            f"Current model_path: {model_path}"
-        )
+        raise FileNotFoundError(f"[Hunyuan3D-2] 缺少形状生成权重文件: {dit_ckpt}")
     if not paint_dir.exists():
-        raise FileNotFoundError(
-            f"[Hunyuan3D-2] Missing texture-generation directory: {paint_dir}\n"
-            f"Expected directory at: {paint_dir}\n"
-            f"Current model_path: {model_path}"
-        )
+        raise FileNotFoundError(f"[Hunyuan3D-2] 缺少纹理生成目录: {paint_dir}")
 
     out_dir = ensure_dir(Path(output_dir))
-    stem = Path(image_path).stem
+    bg = BackgroundRemover()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    gen = torch.Generator(device=device).manual_seed(int(seed))
+
+    # 1) 解析输入：图像或文本
+    image = None
+    if input_type.lower() == "image":
+        image_path = prompt
+        stem = Path(image_path).stem
+        log(f"Reading image: {image_path}")
+        image = Image.open(image_path).convert("RGBA")
+        if image.mode == "RGB" and do_rembg_if_rgb:
+            log("Running background remover (image is RGB)...")
+            image = bg(image)
+
+    elif input_type.lower() == "text":
+        prompt = prompt.strip()
+        if not prompt:
+            raise ValueError("Empty text prompt.")
+        # ---- 文生图：优先使用本地 Diffusers 管线目录（含 model_index.json）；否则使用官方 repo_id ----
+        t2i_dir = Path(t2i_model)
+        use_local = t2i_dir.is_dir() and (t2i_dir / "model_index.json").exists()
+
+        log(f"[T2I] Using {'local' if use_local else 'remote'} HunyuanDiT-v1.1-Distilled for text→image.")
+        from diffusers import HunyuanDiTPipeline  # 官方文档推荐用法 [1](https://huggingface.co/docs/huggingface_hub/package_reference/environment_variables)
+
+        if use_local:
+            pipe = HunyuanDiTPipeline.from_pretrained(
+                str(t2i_dir), torch_dtype=torch.float16, local_files_only=True
+            ).to(device)
+        else:
+            pipe = HunyuanDiTPipeline.from_pretrained(
+                "Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled",  # 官方模型 repo_id
+                torch_dtype=torch.float16
+            ).to(device)
+
+        # 官方示例：pipe(prompt).images[0] 生成 PIL.Image 
+        log(f"[T2I] Generating image for prompt: '{prompt}'")
+        image_t2i = pipe(prompt).images[0]  # PIL RGB
+
+        # 可选：去背景，与图生3D路径保持一致
+        if image_t2i.mode == "RGB" and do_rembg_if_rgb:
+            log("[T2I] Running background remover on generated RGB image...")
+            image_t2i = bg(image_t2i)
+
+        # 转 RGBA 以统一下游
+        image = image_t2i.convert("RGBA")
+
+        # 保存 temp.png 到 output
+        stem = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in prompt)[:40] or uuid.uuid4().hex[:8]
+        t2i_png = out_dir / "temp.png"
+        try:
+            image.save(str(t2i_png))
+            log(f"[T2I] Saved generated image: {t2i_png}")
+        except Exception as e:
+            log(f"[T2I] Save temp.png failed: {e}")
+    else:
+        raise ValueError("input_type must be 'image' or 'text'.")
+
+    # 2) Hunyuan3D-2 形状与贴图
     glb_path = out_dir / f"{stem}_hunyuan3d2.glb"
 
     log("Loading Hunyuan3D-2 pipelines...")
     pipeline_shapegen = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(model_path)
+
+    # （保留你的安全检查临时补丁，避免 transformers 在 torch<2.6 且加载 .bin 时拦截）
+    try:
+        import transformers.utils.import_utils as _iu
+        if hasattr(_iu, "check_torch_load_is_safe"):
+            _iu.check_torch_load_is_safe = lambda: None
+            log("[Patch] Disabled transformers torch.load safety check in-process (temporary).")
+    except Exception as _e:
+        log(f"[Patch] Failed to disable safety check: {_e}")
+
     pipeline_texgen = Hunyuan3DPaintPipeline.from_pretrained(model_path)
 
-    log(f"Reading image: {image_path}")
-    image = Image.open(image_path).convert("RGBA")
+    # 形状生成参数
+    # Build params only with values explicitly provided; otherwise let pipeline use its defaults
+    params: Dict[str, Any] = {"generator": gen, "mc_algo": mc_algo}
+    if octree_resolution is not None:
+        params["octree_resolution"] = int(octree_resolution)
+    if num_inference_steps is not None:
+        params["num_inference_steps"] = int(num_inference_steps)
+    if guidance_scale is not None:
+        params["guidance_scale"] = float(guidance_scale)
 
-    if image.mode == "RGB" and do_rembg_if_rgb:
-        log("Running background remover (image is RGB)...")
-        rembg = BackgroundRemover()
-        image = rembg(image)
+    log(f"Hunyuan3D-2 shapegen params: {params}")
 
     log("Running Hunyuan3D-2 shape generation...")
-    mesh = pipeline_shapegen(image=image)[0]
+    mesh = pipeline_shapegen(image=image, **params)[0]
+
     log("Running Hunyuan3D-2 texture painting...")
     mesh = pipeline_texgen(mesh, image=image)
 
     log("Exporting GLB...")
     mesh.export(str(glb_path))
 
-    result = {
+    artifacts = {"glb": str(glb_path)}
+    # 若是文本入口，附带 temp.png
+    if input_type.lower() == "text":
+        png_guess = out_dir / "temp.png"
+        if png_guess.exists():
+            artifacts["t2i_image"] = str(png_guess)
+
+    log("Done.")
+
+    return {
         "backend": "hunyuan3d-2",
-        "inputs": {
-            "image_path": str(image_path),
-            "model_path": str(model_path),
-        },
-        "artifacts": {
-            "glb": str(glb_path),
-        },
+        "inputs": {"input": prompt, "input_type": input_type, "model_path": str(model_path)},
+        "artifacts": artifacts,
         "params": {
             "do_rembg_if_rgb": do_rembg_if_rgb,
             "repo_dir": repo_dir,
             "cuda_visible_devices": cuda_visible_devices,
+            "t2i_model": t2i_model,
+            "seed": seed,
+            "octree_resolution": octree_resolution,
+            "num_inference_steps": num_inference_steps,
+            "guidance_scale": guidance_scale,
+            "mc_algo": mc_algo,
         }
     }
-    return result
 
 
 # -----------------------------
@@ -280,6 +529,7 @@ def infer(
     model: str,
     image_path: str,
     output_dir: str,
+    input_type: str = "image",
     hunyuan_env: str = "hunyuan3d2",
     trellis_env: str = "trellis",
     hy3dgen_repo: Optional[str] = None,  # repo root containing hy3dgen
@@ -308,8 +558,9 @@ def infer(
         log(f"Current env '{current_env}' == required '{required_env}', running inline...")
         if model.lower() == "trellis":
             result = run_trellis_inline(
-                image_path=image_path,
+                prompt=image_path,
                 output_dir=output_dir,
+                input_type=input_type,
                 cuda_visible_devices=cuda_visible_devices,
                 **kwargs
             )
@@ -317,9 +568,10 @@ def infer(
             if "model_path" not in kwargs:
                 raise ValueError("Hunyuan3D-2 requires 'model_path' in kwargs.")
             result = run_hunyuan3d2_inline(
-                image_path=image_path,
+                prompt=image_path,
                 output_dir=output_dir,
                 repo_dir=hy3dgen_repo,
+                input_type=input_type,
                 cuda_visible_devices=cuda_visible_devices,
                 **kwargs
             )
@@ -350,16 +602,19 @@ def infer(
 
     # Build worker command (use -u to disable buffering)
     worker_payload = json.dumps(kwargs)
+    
     cmd_list = [
-        python_bin, "-u", os.path.abspath(__file__),
+    str(python_bin), "-u", str(os.path.abspath(__file__)),
         "--worker",
-        "--model", model,
-        "--image", image_path,
-        "--output", output_dir,
-        "--hunyuan-env", hunyuan_env,
-        "--trellis-env", trellis_env,
-        "--kwargs-json", worker_payload,
+        "--model", str(model),
+        "--input", str(image_path),
+        "--input-type", str(input_type or "image"),
+        "--output", str(output_dir),
+        "--hunyuan-env", str(hunyuan_env),
+        "--trellis-env", str(trellis_env),
+        "--kwargs-json", str(worker_payload),
     ]
+
 
     # Environment for subprocess
     env = dict(os.environ)
@@ -426,7 +681,8 @@ def parse_args():
 
     # Common
     p.add_argument("--model", required=True, choices=["trellis", "hunyuan3d-2"], help="Which backend to use.")
-    p.add_argument("--image", required=True, help="Path to input image.")
+    p.add_argument("--input", required=True, help="Path to input image or text prompt.")
+    p.add_argument("--input-type", default="image", help="Type of input(image or text).")
     p.add_argument("--output", required=True, help="Output directory.")
     p.add_argument("--worker", action="store_true", help="Internal: run inside target env.")
     p.add_argument("--hunyuan-env", default="hunyuan3d2", help="Conda env for Hunyuan3D-2.")
@@ -449,8 +705,9 @@ def main():
     if args.worker:
         if args.model == "trellis":
             result = run_trellis_inline(
-                image_path=args.image,
+                prompt=args.input,
                 output_dir=args.output,
+                input_type=args.input_type,
                 cuda_visible_devices=args.cuda_visible_devices,
                 **kwargs
             )
@@ -460,8 +717,9 @@ def main():
             # Avoid duplicate passing of repo_dir (pop from kwargs, pass explicitly)
             repo_dir = kwargs.pop("repo_dir", None)
             result = run_hunyuan3d2_inline(
-                image_path=args.image,
+                prompt=args.input,
                 output_dir=args.output,
+                input_type=args.input_type,
                 repo_dir=repo_dir,
                 cuda_visible_devices=args.cuda_visible_devices,
                 **kwargs
@@ -473,8 +731,9 @@ def main():
     # Controller mode: decide inline vs spawn
     result = infer(
         model=args.model,
-        image_path=args.image,
+        image_path=args.input,
         output_dir=args.output,
+        input_type=args.input_type,
         hunyuan_env=args.hunyuan_env,
         trellis_env=args.trellis_env,
         hy3dgen_repo=args.hy3dgen_repo,

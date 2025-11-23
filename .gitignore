@@ -404,3 +404,5 @@ outputs
 *.glb
 *.ply
 *.mp4
+
+eval_renders/
