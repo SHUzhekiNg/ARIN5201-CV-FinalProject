@@ -47,6 +47,7 @@ def ensure_dir(path: Path):
 # -----------------------------
 # TRELLIS inline runner
 # -----------------------------
+
 def run_trellis_inline(
     image_path: str,
     output_dir: str,
@@ -63,6 +64,7 @@ def run_trellis_inline(
     texture_size: int = 1024,
     simplify_ratio: float = 0.95,
     cuda_visible_devices: Optional[str] = None,
+    render_video: bool = False, 
 ) -> Dict[str, Any]:
     """
     Execute TRELLIS inference inside the current Python process (assumes trellis env).
@@ -74,15 +76,18 @@ def run_trellis_inline(
     if attn_backend:
         os.environ['ATTN_BACKEND'] = attn_backend
     os.environ['SPCONV_ALGO'] = spconv_algo
+    os.environ['NVDIFRAST_USE_EGL'] = '1'
 
     # Optional: silence noisy warnings (xFormers availability)
     import warnings
     warnings.filterwarnings("ignore", message="xFormers is available")
 
+    import sys
+    sys.path.insert(0, "/disk2/licheng/code/ARIN5201-CV-FinalProject/TRELLIS")
+
     from PIL import Image
-    import imageio
     from trellis.pipelines import TrellisImageTo3DPipeline
-    from trellis.utils import render_utils, postprocessing_utils
+    from trellis.utils import postprocessing_utils
 
     out_dir = ensure_dir(Path(output_dir))
     stem = Path(image_path).stem
@@ -117,13 +122,22 @@ def run_trellis_inline(
         sparse_structure_sampler_params=sparse_structure_sampler_params,
         slat_sampler_params=slat_sampler_params,
     )
-    # outputs keys: 'gaussian', 'radiance_field', 'mesh' (each a list)
+    # outputs: 'gaussian', 'radiance_field', 'mesh'
 
-    log(f"Rendering {render_target} video ({render_channel})...")
-    if render_target not in outputs:
-        raise ValueError(f"render_target '{render_target}' not in outputs: {list(outputs.keys())}")
-    video = render_utils.render_video(outputs[render_target][0])[render_channel]
-    imageio.mimsave(str(mp4_path), video, fps=30)
+    if render_video:
+        try:
+            # 远程服务器常无显示服务，EGL 模式更稳
+            os.environ['NVDIFRAST_USE_EGL'] = '1'
+            from trellis.utils import render_utils
+            log(f"Rendering {render_target} video ({render_channel})...")
+            if render_target not in outputs:
+                raise ValueError(f"render_target '{render_target}' not in outputs: {list(outputs.keys())}")
+            video = render_utils.render_video(outputs[render_target][0])[render_channel]
+            import imageio
+            imageio.mimsave(str(mp4_path), video, fps=30)
+        except Exception as e:
+            log(f"[WARN] Render video failed: {e}. Continue to export GLB/PLY.")
+            mp4_path = None  # 标记未生成
 
     log("Exporting GLB...")
     glb = postprocessing_utils.to_glb(
@@ -137,17 +151,20 @@ def run_trellis_inline(
     log("Saving Gaussian PLY...")
     outputs['gaussian'][0].save_ply(str(ply_path))
 
+    artifacts = {
+        "glb": str(glb_path),
+        "ply": str(ply_path),
+    }
+    if render_video and mp4_path is not None:
+        artifacts["mp4"] = str(mp4_path)
+
     result = {
         "backend": "trellis",
         "inputs": {
             "image_path": str(image_path),
             "seed": seed,
         },
-        "artifacts": {
-            "mp4": str(mp4_path),
-            "glb": str(glb_path),
-            "ply": str(ply_path),
-        },
+        "artifacts": artifacts,
         "params": {
             "render_target": render_target,
             "render_channel": render_channel,
@@ -158,6 +175,7 @@ def run_trellis_inline(
             "sparse_structure_sampler_params": sparse_structure_sampler_params,
             "slat_sampler_params": slat_sampler_params,
             "cuda_visible_devices": cuda_visible_devices,
+            "render_video": render_video,
         }
     }
     return result
