@@ -25,6 +25,10 @@
         .square { width:100%; height:100%; display:flex; align-items:center; justify-content:center; }
         .frame { width:100%; max-width:100%; max-height:100%; aspect-ratio:1 / 1; }
         model-viewer { width: 100%; height:100%; background: #1a1a1a; border-radius:8px; display:block; }
+        /* Force the internal progress bar to a fixed green color */
+        model-viewer { --progress-bar-color: #4caf50; }
+        model-viewer::part(progress-bar) { background: rgba(0,0,0,0); }
+        model-viewer::part(progress-bar-value), model-viewer::part(progress) { background: #4caf50 !important; }
         .btn { padding: 8px 12px; background: #2a2a2a; border: 1px solid #3a3a3a; border-radius: 6px; color: #eee; cursor: pointer; }
         .btn + .btn { margin-left: 8px; }
         .kv { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
@@ -33,6 +37,13 @@
         .hint { color:#aaa; margin:10px 0 10px 0; line-height:1.25; }
         .controls .btn { margin-right:8px; }
         .userInput {height: 100%;}
+        /* upload box styles (match index.html style) */
+        .upload-center { display:flex; justify-content:center; }
+        .file-drop { box-sizing: border-box; width: 560px; height: 260px; border: 2px dashed #444; border-radius: 10px; display:flex; align-items:center; justify-content:center; background: rgba(255,255,255,0.01); cursor:pointer; }
+        .file-drop:focus { outline: 3px solid rgba(74,144,226,0.18); }
+        .file-drop-placeholder { text-align:center; color:#bbb; }
+        .file-drop-placeholder div.plus { font-size:72px; line-height:1; color:#888; }
+        .file-drop .file-info { margin-top:12px; color:#999; font-size:13px; }
     </style>
 </head>
 
@@ -48,11 +59,18 @@
   {% if waiting %}
   <div style="padding:28px; width:100%">
     <h2 style="color:#ddd">Upload GLB File and Visualize</h2>
-    <form action="/view/upload" method="post" enctype="multipart/form-data">
-      <div style="margin:12px 0">
-        <input type="file" name="glb" accept=".glb" />
+    <form id="uploadForm" action="/view/upload" method="post" enctype="multipart/form-data">
+      <div style="margin:12px 0" class="upload-center">
+        <div class="file-drop" id="fileDrop" tabindex="0" aria-label="Drag or drop GLB file here">
+          <input id="glbInput" type="file" name="glb" accept=".glb" style="display:none" />
+          <div class="file-drop-placeholder" id="fileDropPlaceholder">
+            <div class="plus">+</div>
+            <div style="margin-top:8px; color:#bbb">Drag or click to upload GLB</div>
+            <div id="fileName" class="file-info"></div>
+          </div>
+        </div>
       </div>
-      <div>
+      <div style="text-align:center; margin-top:12px">
         <button class="btn" type="submit">Upload</button>
       </div>
     </form>
@@ -133,6 +151,78 @@
         URL.revokeObjectURL(url);
       });
     }
+  </script>
+  <script>
+    // Drag/drop upload script with fallback upload via fetch when assigning input.files is not allowed
+    (function(){
+      const drop = document.getElementById('fileDrop');
+      const input = document.getElementById('glbInput');
+      const nameEl = document.getElementById('fileName');
+      const form = document.getElementById('uploadForm');
+      let droppedFile = null;
+
+      if (!drop || !input || !form) return;
+
+      function showFile(file){
+        if (!file) { nameEl.textContent = ''; return; }
+        nameEl.textContent = file.name + ' (' + Math.round(file.size/1024) + ' KB)';
+      }
+
+      drop.addEventListener('click', () => input.click());
+      drop.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } });
+
+      drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.style.borderColor = '#4a90e2'; drop.style.background = 'rgba(74,144,226,0.02)'; });
+      drop.addEventListener('dragleave', (e) => { e.preventDefault(); drop.style.borderColor = ''; drop.style.background = 'rgba(255,255,255,0.01)'; });
+      drop.addEventListener('drop', (e) => {
+        e.preventDefault(); drop.style.borderColor = ''; drop.style.background = 'rgba(255,255,255,0.01)';
+        const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        if (f) {
+          droppedFile = f;
+          // Try to set input.files (may be read-only in some browsers)
+          try {
+            const dataTransfer = new DataTransfer();
+            dataTransfer.items.add(f);
+            input.files = dataTransfer.files;
+          } catch (err) {
+            // fallback: keep droppedFile and handle on submit
+            console.warn('Could not assign to input.files, will upload via fetch on submit', err);
+          }
+          showFile(f);
+        }
+      });
+
+      input.addEventListener('change', (e) => {
+        const f = input.files && input.files[0];
+        if (f) droppedFile = f;
+        showFile(f);
+      });
+
+      // Intercept form submit: if input.files empty but we have droppedFile, upload via fetch
+      form.addEventListener('submit', async (e) => {
+        if ((!input.files || input.files.length === 0) && droppedFile) {
+          e.preventDefault();
+          const fd = new FormData();
+          fd.append('glb', droppedFile, droppedFile.name);
+          try {
+            const resp = await fetch(form.action, { method: 'POST', body: fd, credentials: 'same-origin' });
+            if (resp.redirected) {
+              window.location.href = resp.url;
+              return;
+            }
+            // If server returns HTML or JSON with redirect URL, try to handle
+            const text = await resp.text();
+            // naïve attempt: if response contains a link to /view, navigate there
+            const m = text.match(/href="(\/view[^"]+)"/i);
+            if (m) { window.location.href = m[1]; return; }
+            // fallback: reload
+            window.location.reload();
+          } catch (err) {
+            console.error('Upload failed', err);
+            alert('Upload failed: ' + err.message);
+          }
+        }
+      });
+    })();
   </script>
 </body>
 </html>

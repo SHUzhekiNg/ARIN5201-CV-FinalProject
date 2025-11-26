@@ -402,6 +402,12 @@ def run_hunyuan3d2_inline(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     gen = torch.Generator(device=device).manual_seed(int(seed))
 
+    # 加载 pipelines（Hunyuan3D-2 的 pipelines 内部自动处理 CUDA 加速）
+    log(f"Loading Hunyuan3D-2 pipelines (device: {device})...")
+    pipeline_shapegen = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(model_path)
+    pipeline_texgen = Hunyuan3DPaintPipeline.from_pretrained(model_path)
+    log("Pipelines loaded successfully.")
+
     # 1) 解析输入：图像或文本
     image = None
     if input_type.lower() == "image":
@@ -460,9 +466,6 @@ def run_hunyuan3d2_inline(
     # 2) Hunyuan3D-2 形状与贴图
     glb_path = out_dir / f"{stem}_hunyuan3d2.glb"
 
-    log("Loading Hunyuan3D-2 pipelines...")
-    pipeline_shapegen = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(model_path)
-
     # （保留你的安全检查临时补丁，避免 transformers 在 torch<2.6 且加载 .bin 时拦截）
     try:
         import transformers.utils.import_utils as _iu
@@ -471,8 +474,6 @@ def run_hunyuan3d2_inline(
             log("[Patch] Disabled transformers torch.load safety check in-process (temporary).")
     except Exception as _e:
         log(f"[Patch] Failed to disable safety check: {_e}")
-
-    pipeline_texgen = Hunyuan3DPaintPipeline.from_pretrained(model_path)
 
     # 形状生成参数
     # Build params only with values explicitly provided; otherwise let pipeline use its defaults

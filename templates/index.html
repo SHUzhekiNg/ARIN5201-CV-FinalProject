@@ -18,6 +18,8 @@
       --accent: #4caf50;
       
     }
+    /* Use border-box everywhere to avoid element sizing overflow */
+    *, *::before, *::after { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
 
     /* 重点：提高层级，避免被覆盖；且始终可点 */
@@ -37,15 +39,22 @@
       opacity: .5; pointer-events: none; cursor: not-allowed;
     }
 
-    main { display: grid; grid-template-columns: 420px 1fr 420px; gap: 12px; padding: 12px; }
+    /* Left column slightly narrower to account for padding and prevent overflow */
+    main { display: grid; grid-template-columns: 380px 1fr 420px; gap: 12px; padding: 12px; height: 70%;}
     .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
     .card .hd { padding: 10px 12px; border-bottom: 1px solid var(--border); font-weight: 600; }
     .card .bd { padding: 12px; }
     .row { display: grid; grid-template-columns: 140px 1fr; align-items: center; gap: 8px; margin-bottom: 10px; }
     input[type="text"], input[type="number"], input[type="file"], select, textarea {
       width: 100%; background: #181818; border: 1px solid var(--border); color: var(--fg);
-      border-radius: 6px; padding: 8px; outline: none;
+      border-radius: 6px; padding: 8px; outline: none; max-width: 100%;
     }
+    /* Image drop zone */
+    .image-drop { border: 2px dashed var(--border); height: 160px; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: #0b0b0b; cursor: pointer; position: relative; overflow: hidden; }
+    .image-drop .placeholder { display:flex; align-items:center; justify-content:center; width:100%; height:100%; }
+    .image-drop .plus { font-size: 56px; color: var(--muted); line-height: 1; }
+    .image-drop.dragover { border-color: var(--accent); background: rgba(76,175,80,0.03); }
+    #imagePreview { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
     textarea { min-height: 80px; }
     .btn { padding: 8px 12px; background: var(--btn); border: 1px solid var(--btn-border); border-radius: 6px; color: var(--fg); cursor: pointer; }
     .btn[disabled] { opacity: .6; cursor: not-allowed; }
@@ -54,7 +63,10 @@
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
     #progressBar { height: 8px; background: #222; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
     #progressBar > div { height: 100%; width: 0%; background: var(--accent); transition: width .25s ease; }
-    #log { height: 320px; overflow: auto; white-space: pre-wrap; font-size: 12px; background: #0f0f0f; border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
+    /* Log fills available vertical space inside the log card */
+    #log { height: 750px; flex: 1 1 auto; overflow: auto; white-space: pre-wrap; font-size: 12px; background: #0f0f0f; border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
+    /* Make the bd element with id logCard a vertical flex container */
+    .card .bd#logCard { display: flex; flex-direction: column; }
     #results a { color: var(--link); }
     .kv div { margin: 4px 0; }
     .kv span { display: inline-block; min-width: 96px; color: var(--muted); }
@@ -96,9 +108,14 @@
 
           <div class="row">
             <label>Image</label>
-            <input type="file" name="image" id="image" accept=".png,.jpg,.jpeg,.webp" />
+            <div id="imageDrop" class="image-drop" tabindex="0" aria-label="图片上传区，点击或拖拽图片到此处">
+              <input type="file" name="image" id="image" accept=".png,.jpg,.jpeg,.webp" style="display:none" />
+              <div class="placeholder" id="imagePlaceholder">
+                <span class="plus">+</span>
+              </div>
+              <img id="imagePreview" src="" alt="preview" style="display:none" />
+            </div>
           </div>
-          <div class="muted" style="margin: -6px 0 10px 148px;">Drag or select a image to upload. The image-based generation will keep a higher priority than text prompt.</div>
 
           <div class="row">
             <label>Text Prompt</label>
@@ -154,7 +171,7 @@
     <!-- 中：进度与日志 -->
     <section class="card">
       <div class="hd">Progressing and Log</div>
-      <div class="bd">
+      <div class="bd" id="logCard">
         <div class="row">
           <label>Work ID</label>
           <div class="mono" id="jobIdBox">—</div>
@@ -163,7 +180,7 @@
           <div id="progressFill"></div>
         </div>
         <div class="muted" style="margin-bottom:10px">Real Time Log(SSE)</div>
-        <div id="log" class="mono"></div>
+        <div id="log" class="mono" style="flex: 1 1 auto;"></div>
       </div>
     </section>
 
@@ -235,6 +252,64 @@
         window.open(panelSwitch.href, '_blank');
       });
     }
+
+    // Image drop zone: drag & drop, click to open file picker, preview
+    (function(){
+      const imageDrop = document.getElementById('imageDrop');
+      const fileInput = document.getElementById('image');
+      const preview = document.getElementById('imagePreview');
+      const placeholder = document.getElementById('imagePlaceholder');
+
+      if (!imageDrop || !fileInput) return;
+
+      function showPreviewFile(file) {
+        if (!file) return;
+        const url = URL.createObjectURL(file);
+        preview.src = url;
+        preview.style.display = 'block';
+        placeholder.style.display = 'none';
+      }
+
+      function setInputFile(file) {
+        try {
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          fileInput.files = dt.files;
+        } catch (e) {
+          // fallback: cannot set file input programmatically in some browsers
+        }
+      }
+
+      imageDrop.addEventListener('click', () => fileInput.click());
+
+      fileInput.addEventListener('change', (e) => {
+        const f = e.target.files && e.target.files[0];
+        if (f) showPreviewFile(f);
+      });
+
+      imageDrop.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        imageDrop.classList.add('dragover');
+      });
+      imageDrop.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        imageDrop.classList.remove('dragover');
+      });
+      imageDrop.addEventListener('drop', (e) => {
+        e.preventDefault();
+        imageDrop.classList.remove('dragover');
+        const f = (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) || null;
+        if (f) {
+          setInputFile(f);
+          showPreviewFile(f);
+        }
+      });
+
+      // keyboard accessibility: Enter or Space opens file dialog
+      imageDrop.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+      });
+    })();
 
     // 重置
     document.getElementById('btnReset').addEventListener('click', () => {
