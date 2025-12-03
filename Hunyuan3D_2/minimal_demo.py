@@ -22,7 +22,7 @@ model_path = '/disk2/licheng/models/Hunyuan3D-2/'
 pipeline_shapegen = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(model_path)
 pipeline_texgen = Hunyuan3DPaintPipeline.from_pretrained(model_path)
 
-image_path = '/disk2/licheng/code/ARIN5201-CV-FinalProject/Hunyuan3D-2/assets/demo.png'
+image_path = '/disk2/licheng/code/ARIN5201-CV-FinalProject/text_gen_exp/trellis/test3.png'
 image = Image.open(image_path).convert("RGBA")
 if image.mode == 'RGB':
     rembg = BackgroundRemover()
@@ -30,4 +30,4 @@ if image.mode == 'RGB':
 
 mesh = pipeline_shapegen(image=image)[0]
 mesh = pipeline_texgen(mesh, image=image)
-mesh.export('demo.glb')
+mesh.export('demo1.glb')

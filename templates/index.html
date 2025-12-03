@@ -70,7 +70,20 @@
     #results a { color: var(--link); }
     .kv div { margin: 4px 0; }
     .kv span { display: inline-block; min-width: 96px; color: var(--muted); }
-    footer { padding: 10px 16px; border-top: 1px solid var(--border); color: var(--muted); }
+    footer { 
+      position: fixed; 
+      bottom: 0; 
+      left: 0; 
+      right: 0; 
+      padding: 10px 16px; 
+      border-top: 1px solid var(--border); 
+      background: var(--bg); 
+      color: var(--muted); 
+      font-size: 12px;
+      z-index: 100;
+    }
+    /* 给 main 底部留出 footer 的空间 */
+    main { padding-bottom: 50px; }
   </style>
 </head>
 <body>
@@ -122,12 +135,62 @@
             <textarea name="prompt" id="prompt" placeholder="Describe anything you want to generate."></textarea>
           </div>
 
+          <!-- Hunyuan3D-2 参数 -->
+          <div id="hunyuanParams">
+            <div style="margin: 12px 0 6px 0; color: var(--muted); font-size: 13px; border-bottom: 1px solid var(--border); padding-bottom: 4px;">Shape Generation</div>
+            <div class="row">
+              <label>Sampling Steps</label>
+              <input type="number" name="hy_num_inference_steps" id="hy_num_inference_steps" value="35" min="10" max="100" step="1" />
+            </div>
+            <div class="row">
+              <label>Guidance (CFG)</label>
+              <input type="number" name="hy_guidance_scale" id="hy_guidance_scale" value="7.5" min="1.0" max="15.0" step="0.5" />
+            </div>
+            <div class="row">
+              <label>Octree Resolution</label>
+              <select name="hy_octree_resolution" id="hy_octree_resolution">
+                <option value="256">256 (Fast)</option>
+                <option value="384" selected>384 (Balanced)</option>
+                <option value="512">512 (High Quality)</option>
+              </select>
+            </div>
+            <div class="row">
+              <label>Seed</label>
+              <input type="number" name="hy_seed" id="hy_seed" value="1234" min="0" max="9999999" step="1" />
+            </div>
+          </div>
+
           <!-- Trellis 额外参数（可选） -->
           <div id="trellisParams">
             <div class="row">
               <label>Model ID</label>
               <input type="text" name="trellis_model" id="trellis_model" value="microsoft/TRELLIS-image-large" />
             </div>
+            
+            <!-- Stage 1: Sparse Structure Generation -->
+            <div style="margin: 12px 0 6px 0; color: var(--muted); font-size: 13px; border-bottom: 1px solid var(--border); padding-bottom: 4px;">Stage 1: Sparse Structure</div>
+            <div class="row">
+              <label>SS Sampling Steps</label>
+              <input type="number" name="ss_sampling_steps" id="ss_sampling_steps" value="50" min="10" max="100" step="1" />
+            </div>
+            <div class="row">
+              <label>SS Guidance (CFG)</label>
+              <input type="number" name="ss_guidance_strength" id="ss_guidance_strength" value="7.5" min="0" max="20" step="0.5" />
+            </div>
+            
+            <!-- Stage 2: Structured Latent Generation -->
+            <div style="margin: 12px 0 6px 0; color: var(--muted); font-size: 13px; border-bottom: 1px solid var(--border); padding-bottom: 4px;">Stage 2: Structured Latent</div>
+            <div class="row">
+              <label>SLAT Sampling Steps</label>
+              <input type="number" name="slat_sampling_steps" id="slat_sampling_steps" value="12" min="1" max="50" step="1" />
+            </div>
+            <div class="row">
+              <label>SLAT Guidance (CFG)</label>
+              <input type="number" name="slat_guidance_strength" id="slat_guidance_strength" value="3.0" min="0" max="20" step="0.1" />
+            </div>
+            
+            <!-- Other Settings -->
+            <div style="margin: 12px 0 6px 0; color: var(--muted); font-size: 13px; border-bottom: 1px solid var(--border); padding-bottom: 4px;">Output Settings</div>
             <div class="row">
               <label>Render Target</label>
               <select name="render_target" id="render_target">
@@ -216,8 +279,11 @@
 
     const modelSel = document.getElementById('model');
     const trellisParams = document.getElementById('trellisParams');
+    const hunyuanParams = document.getElementById('hunyuanParams');
     function syncParamVisibility() {
-      trellisParams.style.display = (modelSel.value === 'trellis') ? 'block' : 'none';
+      const isTrellis = modelSel.value === 'trellis';
+      trellisParams.style.display = isTrellis ? 'block' : 'none';
+      hunyuanParams.style.display = isTrellis ? 'none' : 'block';
     }
     modelSel.addEventListener('change', syncParamVisibility);
     syncParamVisibility();

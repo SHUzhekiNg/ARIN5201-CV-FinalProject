@@ -44,68 +44,6 @@ def ensure_dir(path: Path):
     return path
 
 
-def analyze_glb(path: str) -> Dict[str, Any]:
-    """Lightweight GLB inspector: returns buffer and image counts/sizes.
-
-    Reads GLB header, parses JSON chunk and inspects `buffers` and `images` entries.
-    This mirrors the controller's analyzer so worker logs include the same diagnostics.
-    """
-    import struct
-    import json as _json
-    import base64
-
-    info: Dict[str, Any] = {"buffers": [], "images": [], "meshes": 0}
-    try:
-        with open(path, 'rb') as f:
-            data = f.read()
-        if len(data) < 12:
-            return {"error": "file too small"}
-        magic, version, length = struct.unpack_from('<4sII', data, 0)
-        if magic != b'glTF':
-            return {"error": "not glb"}
-        offset = 12
-        json_chunk = None
-        bin_chunk = None
-        while offset + 8 <= len(data):
-            chunk_len, chunk_type = struct.unpack_from('<I4s', data, offset)
-            offset += 8
-            chunk_data = data[offset: offset + chunk_len]
-            offset += chunk_len
-            if chunk_type == b'JSON':
-                try:
-                    json_chunk = _json.loads(chunk_data.decode('utf-8'))
-                except Exception:
-                    json_chunk = None
-            elif chunk_type == b'BIN\x00':
-                bin_chunk = chunk_data
-
-        if json_chunk is None:
-            return {"error": "no json chunk"}
-
-        for b in json_chunk.get('buffers', []):
-            blen = b.get('byteLength')
-            info['buffers'].append({'byteLength': blen})
-
-        for im in json_chunk.get('images', []):
-            uri = im.get('uri')
-            if not uri:
-                info['images'].append({'uri': None, 'note': 'bufferView'})
-            elif uri.startswith('data:'):
-                try:
-                    header, b64 = uri.split(',', 1)
-                    raw = base64.b64decode(b64)
-                    info['images'].append({'uri': 'data', 'size': len(raw)})
-                except Exception:
-                    info['images'].append({'uri': 'data', 'size': None})
-            else:
-                info['images'].append({'uri': uri, 'size': None})
-
-        info['meshes'] = len(json_chunk.get('meshes', []))
-        return info
-    except Exception as e:
-        return {"error": str(e)}
-
-
 # -----------------------------
 # TRELLIS inline runner
 # -----------------------------
@@ -153,28 +91,19 @@ def run_trellis_inline(
     import sys
     import torch
     from PIL import Image
+    import rembg  # TRELLIS 环境自带 rembg
 
     # trellis
     sys.path.insert(0, "/disk2/licheng/code/ARIN5201-CV-FinalProject/TRELLIS")
     from trellis.pipelines import TrellisImageTo3DPipeline
     from trellis.utils import postprocessing_utils
 
-    # 使用同一套 rembg 以与 Hunyuan3D-2 保持一致
-    try:
-        from hy3dgen.rembg import BackgroundRemover
-    except Exception:
-        # 在某些环境（例如只安装了 TRELLIS 的虚拟环境）可能没有 hy3dgen 包。
-        # 为了兼容性，提供一个轻量回退实现 —— 不做去背景，只返回原图。
-        class BackgroundRemover:
-            def __init__(self):
-                pass
-            def __call__(self, img):
-                # 返回原始 PIL.Image，不做处理
-                return img
-        log("[WARN] hy3dgen.rembg not available in this environment; background removal disabled.")
-
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    bg = BackgroundRemover()
+    
+    # 使用标准 rembg（TRELLIS 环境自带）
+    def remove_background(img: Image.Image) -> Image.Image:
+        """Remove background using rembg package."""
+        return rembg.remove(img)
     out_dir = ensure_dir(Path(output_dir))
 
     # ---- 统一输入处理：支持 image / text，与 Hunyuan3D-2 保持一致 ----
@@ -185,7 +114,7 @@ def run_trellis_inline(
         image = Image.open(prompt)
         if image.mode == "RGB" and do_rembg_if_rgb:
             log("Running background remover (image is RGB)...")
-            image = bg(image)
+            image = remove_background(image)
     elif input_type.lower() == "text":
         prompt = prompt.strip()
         if not prompt:
@@ -208,7 +137,7 @@ def run_trellis_inline(
         image_t2i = pipe(prompt).images[0]  # PIL RGB
         if image_t2i.mode == "RGB" and do_rembg_if_rgb:
             log("[T2I] Running background remover on generated RGB image...")
-            image_t2i = bg(image_t2i)
+            image_t2i = remove_background(image_t2i)
         image = image_t2i  # TRELLIS 原始读取为 PIL.Image
         stem = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in prompt)[:40] or uuid.uuid4().hex[:8]
         t2i_png = out_dir / "temp.png"
@@ -271,26 +200,7 @@ def run_trellis_inline(
         simplify=simplify_ratio,
         texture_size=texture_size,
     )
-    # Try to force embedded images when exporter supports it; fall back to default export.
-    try:
-        # common variants: embed_images, embed
-        try:
-            glb.export(str(glb_path), embed_images=True)
-        except TypeError:
-            try:
-                glb.export(str(glb_path), embed=True)
-            except TypeError:
-                glb.export(str(glb_path))
-    except Exception as e:
-        log(f"[WARN] glb.export with embed args failed: {e}; falling back to default export.")
-        glb.export(str(glb_path))
-
-    # Analyze exported GLB for debugging parity issues
-    try:
-        analysis = analyze_glb(str(glb_path))
-        log(f"GLB analysis (trellis): {analysis}")
-    except Exception as e:
-        log(f"GLB analysis failed: {e}")
+    glb.export(str(glb_path))
 
     log("Saving Gaussian PLY...")
     outputs["gaussian"][0].save_ply(str(ply_path))
@@ -306,19 +216,6 @@ def run_trellis_inline(
             artifacts["t2i_image"] = str(png_guess)
 
     log("Done.")
-
-    # include artifact sizes and analysis in result to help controller compare runs
-    try:
-        art_sizes = {}
-        if glb_path.exists():
-            art_sizes['glb'] = glb_path.stat().st_size
-        if ply_path.exists():
-            art_sizes['ply'] = ply_path.stat().st_size
-        result['artifact_sizes'] = art_sizes
-        if 'analysis' in locals():
-            result['glb_analysis'] = analysis
-    except Exception:
-        pass
 
     result = {
         "backend": "trellis",
@@ -360,9 +257,9 @@ def run_hunyuan3d2_inline(
     # 文生图模型目录：若是本地 Diffusers 管线目录（含 model_index.json）将优先使用；否则回落到官方 repo_id
     t2i_model: str = "/disk2/licheng/models/HunyuanDiT-v1.1-Diffusers-Distilled",
     seed: int = 1234,
-    octree_resolution: Optional[int] = None,
-    num_inference_steps: Optional[int] = None,
-    guidance_scale: Optional[float] = None,
+    octree_resolution: int = 128,
+    num_inference_steps: int = 5,
+    guidance_scale: float = 5.0,
     mc_algo: str = "mc",
 ) -> Dict[str, Any]:
     """
@@ -401,12 +298,6 @@ def run_hunyuan3d2_inline(
     bg = BackgroundRemover()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     gen = torch.Generator(device=device).manual_seed(int(seed))
-
-    # 加载 pipelines（Hunyuan3D-2 的 pipelines 内部自动处理 CUDA 加速）
-    log(f"Loading Hunyuan3D-2 pipelines (device: {device})...")
-    pipeline_shapegen = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(model_path)
-    pipeline_texgen = Hunyuan3DPaintPipeline.from_pretrained(model_path)
-    log("Pipelines loaded successfully.")
 
     # 1) 解析输入：图像或文本
     image = None
@@ -466,6 +357,9 @@ def run_hunyuan3d2_inline(
     # 2) Hunyuan3D-2 形状与贴图
     glb_path = out_dir / f"{stem}_hunyuan3d2.glb"
 
+    log("Loading Hunyuan3D-2 pipelines...")
+    pipeline_shapegen = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(model_path)
+
     # （保留你的安全检查临时补丁，避免 transformers 在 torch<2.6 且加载 .bin 时拦截）
     try:
         import transformers.utils.import_utils as _iu
@@ -475,17 +369,16 @@ def run_hunyuan3d2_inline(
     except Exception as _e:
         log(f"[Patch] Failed to disable safety check: {_e}")
 
-    # 形状生成参数
-    # Build params only with values explicitly provided; otherwise let pipeline use its defaults
-    params: Dict[str, Any] = {"generator": gen, "mc_algo": mc_algo}
-    if octree_resolution is not None:
-        params["octree_resolution"] = int(octree_resolution)
-    if num_inference_steps is not None:
-        params["num_inference_steps"] = int(num_inference_steps)
-    if guidance_scale is not None:
-        params["guidance_scale"] = float(guidance_scale)
+    pipeline_texgen = Hunyuan3DPaintPipeline.from_pretrained(model_path)
 
-    log(f"Hunyuan3D-2 shapegen params: {params}")
+    # 形状生成参数
+    params = {
+        "generator": gen,
+        "octree_resolution": int(octree_resolution),
+        "num_inference_steps": int(num_inference_steps),
+        "guidance_scale": float(guidance_scale),
+        "mc_algo": mc_algo,
+    }
 
     log("Running Hunyuan3D-2 shape generation...")
     mesh = pipeline_shapegen(image=image, **params)[0]

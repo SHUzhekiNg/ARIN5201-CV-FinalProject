@@ -406,3 +406,10 @@ outputs
 *.mp4
 
 eval_renders/
+Post-Processed/
+# text_gen_exp/
+# evaluation/
+*.pdf
+*.png
+*.json
+*.csv

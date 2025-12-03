@@ -14,21 +14,20 @@ pipeline = TrellisImageTo3DPipeline.from_pretrained("microsoft/TRELLIS-image-lar
 pipeline.cuda()
 
 # Load an image
-image = Image.open("/disk2/licheng/code/ARIN5201-CV-FinalProject/TRELLIS/assets/example_image/T.png")
+image = Image.open("/disk2/licheng/code/ARIN5201-CV-FinalProject/text_gen_exp/trellis/test2.png")
 
 # Run the pipeline
 outputs = pipeline.run(
     image,
     seed=1,
-    # Optional parameters
-    # sparse_structure_sampler_params={
-    #     "steps": 12,
-    #     "cfg_strength": 7.5,
-    # },
-    # slat_sampler_params={
-    #     "steps": 12,
-    #     "cfg_strength": 3,
-    # },
+    sparse_structure_sampler_params={
+        "steps": 50,
+        "cfg_strength": 7.5,
+    },
+    slat_sampler_params={
+        "steps": 50,
+        "cfg_strength": 3,
+    },
 )
 # outputs is a dictionary containing generated 3D assets in different formats:
 # - outputs['gaussian']: a list of 3D Gaussians

@@ -103,9 +103,20 @@ def start_job():
     if model == "hunyuan3d-2":
         hy3dgen_repo = "/disk2/licheng/code/ARIN5201-CV-FinalProject/Hunyuan3D_2"
         model_path = "/disk2/licheng/models/Hunyuan3D-2/"
+        
+        # 解析 Hunyuan3D-2 参数
+        hy_num_inference_steps = request.form.get("hy_num_inference_steps", "50").strip()
+        hy_guidance_scale = request.form.get("hy_guidance_scale", "7.5").strip()
+        hy_octree_resolution = request.form.get("hy_octree_resolution", "384").strip()
+        hy_seed = request.form.get("hy_seed", "1234").strip()
+        
         kwargs.update({
             "model_path": model_path,
             "do_rembg_if_rgb": True,
+            "num_inference_steps": int(hy_num_inference_steps) if hy_num_inference_steps else 50,
+            "guidance_scale": float(hy_guidance_scale) if hy_guidance_scale else 7.5,
+            "octree_resolution": int(hy_octree_resolution) if hy_octree_resolution else 384,
+            "seed": int(hy_seed) if hy_seed else 1234,
         })
         if hy3dgen_repo:
             kwargs["repo_dir"] = hy3dgen_repo
@@ -117,6 +128,14 @@ def start_job():
         spconv_algo = request.form.get("spconv_algo", "native").strip()
         texture_size = int(request.form.get("texture_size", "1024"))
         simplify_ratio = float(request.form.get("simplify_ratio", "0.95"))
+        
+        # Stage 1: Sparse Structure sampler params
+        ss_sampling_steps = request.form.get("ss_sampling_steps", "12").strip()
+        ss_guidance_strength = request.form.get("ss_guidance_strength", "7.5").strip()
+        # Stage 2: Structured Latent sampler params
+        slat_sampling_steps = request.form.get("slat_sampling_steps", "12").strip()
+        slat_guidance_strength = request.form.get("slat_guidance_strength", "3.0").strip()
+        
         kwargs.update({
             "seed": 1,
             "trellis_model": trellis_model,
@@ -126,6 +145,12 @@ def start_job():
             "texture_size": texture_size,
             "simplify_ratio": simplify_ratio,
             "do_rembg_if_rgb": True,
+            # Sparse structure sampler
+            "sparse_structure_steps": int(ss_sampling_steps) if ss_sampling_steps else None,
+            "sparse_structure_cfg": float(ss_guidance_strength) if ss_guidance_strength else None,
+            # Structured latent sampler
+            "slat_steps": int(slat_sampling_steps) if slat_sampling_steps else None,
+            "slat_cfg": float(slat_guidance_strength) if slat_guidance_strength else None,
         })
     else:
         return Response("无效的模型选择", status=400)
