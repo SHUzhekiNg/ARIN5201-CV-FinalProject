@@ -9,8 +9,6 @@
 
 - Evaluation: Final report with quantitative and qualitative analysis
 
-
-
 ## Expected Outcomes
 A successful project will deliver a complete pipeline and report demonstrating:
 
@@ -19,8 +17,6 @@ A successful project will deliver a complete pipeline and report demonstrating:
 - **Visual Fidelity**: Realism and quality of applied textures and materials
 
 - **Semantic Consistency**: Alignment between generated 3D model and input content
-
-
 
 ## Implementation Steps
 1. Select a base model and 3D representation approach
@@ -40,48 +36,48 @@ A successful project will deliver a complete pipeline and report demonstrating:
 - Plan for post-processing in software like Blender for optimal quality
 
 
+
 # TODOs:
-- [ ] Basic Pipeline @ Licheng
+
+- [x] Basic Pipeline @ Licheng
     - [x] Dataset Prepare
     - [x] Hunyuan3D 2.0
     - [x] Trellis3D
 
-- [ ] Gradio Website
+- [x] Website @ CC
 
-- [ ] Metrics(**Hausdorff Distance**)
+- [x] Metrics(**Hausdorff Distance**) @ CC
 
-- [ ] Blender API PostProcessing @ Kexiang
-
-
-
-# Paper Works:
-
-### Technical Report
-
-6-page CVPR-style paper (references excluded from page count) containing:
-
-- Team member names and responsibilities
-
-- Project timeline with milestones
-
-- Methodology and technical approach
-
-- Experimental results and analysis
-
-- Conclusion and references
+- [x] Blender API PostProcessing @ Kexiang
 
 
-### Presentation Slides
 
-Slide deck for final presentation (15-minute presentation + 5 minutes Q&A).
+# Installation
 
-Requirements
+1. Follow [Hunyuan3D_2](https://github.com/Tencent-Hunyuan/Hunyuan3D-2?tab=readme-ov-file#install-requirements)'s instructions to make your own `hunyuan3d2` env
 
-- The contributions of all team members should be highly relevant to the outcomes of the project.
+2. Follow [TRELLIS](https://github.com/microsoft/TRELLIS?tab=readme-ov-file#-installation)'s  instructions to make your own `trellis` env
 
-- Report is supposed to follow CVPR formatting guidelines. You can find the official template at
-https://github.com/cvpr-org/author-kit/releases
+3. Install flask and rtree in `trellis` env
 
-- Projects should address all original requirements. Implementations that handle challenges in
-corresponding areas successfully are welcomed and can contribute to higher scores.
+    ```python
+    conda activate trellis
+    pip install flask rtree
+    ```
 
+
+
+# Start Frontend
+
+```python
+conda activate trellis
+python app.py
+```
+
+
+
+# Dataset for eval
+
+You may refer to this https://github.com/rehg-lab/lowshot-shapebias/tree/main/toys4k
+
+and do preprocessing following https://github.com/microsoft/TRELLIS/blob/main/DATASET.md#dataset-toolkits
