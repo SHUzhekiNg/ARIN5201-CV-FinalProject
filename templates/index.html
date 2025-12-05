@@ -7,14 +7,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root {
-      --bg: #121212;
-      --fg: #eee;
-      --muted: #aaa;
-      --panel: #1a1a1a;
-      --border: #2a2a2a;
-      --btn: #2a2a2a;
-      --btn-border: #3a3a3a;
-      --link: #8ab4f8;
+      --bg: #f5f5f5;
+      --fg: #222;
+      --muted: #666;
+      --panel: #fff;
+      --border: #ddd;
+      --btn: #e8e8e8;
+      --btn-border: #ccc;
+      --link: #1a73e8;
       --accent: #4caf50;
       
     }
@@ -46,11 +46,11 @@
     .card .bd { padding: 12px; }
     .row { display: grid; grid-template-columns: 140px 1fr; align-items: center; gap: 8px; margin-bottom: 10px; }
     input[type="text"], input[type="number"], input[type="file"], select, textarea {
-      width: 100%; background: #181818; border: 1px solid var(--border); color: var(--fg);
+      width: 100%; background: #fff; border: 1px solid var(--border); color: var(--fg);
       border-radius: 6px; padding: 8px; outline: none; max-width: 100%;
     }
     /* Image drop zone */
-    .image-drop { border: 2px dashed var(--border); height: 160px; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: #0b0b0b; cursor: pointer; position: relative; overflow: hidden; }
+    .image-drop { border: 2px dashed var(--border); height: 160px; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: #fafafa; cursor: pointer; position: relative; overflow: hidden; }
     .image-drop .placeholder { display:flex; align-items:center; justify-content:center; width:100%; height:100%; }
     .image-drop .plus { font-size: 56px; color: var(--muted); line-height: 1; }
     .image-drop.dragover { border-color: var(--accent); background: rgba(76,175,80,0.03); }
@@ -61,10 +61,10 @@
     .btn + .btn { margin-left: 8px; }
     .muted { color: var(--muted); }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
-    #progressBar { height: 8px; background: #222; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+    #progressBar { height: 8px; background: #e0e0e0; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
     #progressBar > div { height: 100%; width: 0%; background: var(--accent); transition: width .25s ease; }
     /* Log fills available vertical space inside the log card */
-    #log { height: 750px; flex: 1 1 auto; overflow: auto; white-space: pre-wrap; font-size: 12px; background: #0f0f0f; border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
+    #log { height: 750px; flex: 1 1 auto; overflow: auto; white-space: pre-wrap; font-size: 12px; background: #fafafa; border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
     /* Make the bd element with id logCard a vertical flex container */
     .card .bd#logCard { display: flex; flex-direction: column; }
     #results a { color: var(--link); }
