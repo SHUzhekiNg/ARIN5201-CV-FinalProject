@@ -65,6 +65,7 @@ A successful project will deliver a complete pipeline and report demonstrating:
     pip install flask rtree
     ```
 
+4. change the `config.yaml` to your path
 
 
 # Start Frontend
@@ -74,10 +75,11 @@ conda activate trellis
 python app.py
 ```
 
-
-
 # Dataset for eval
 
 You may refer to this https://github.com/rehg-lab/lowshot-shapebias/tree/main/toys4k
 
 and do preprocessing following https://github.com/microsoft/TRELLIS/blob/main/DATASET.md#dataset-toolkits
+
+
+# Evaluation

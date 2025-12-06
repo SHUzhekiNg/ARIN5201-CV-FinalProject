@@ -1,0 +1,53 @@
+# Flask 3D Generation Service Configuration
+
+server:
+  host: "0.0.0.0"
+  port: 5000
+  debug: false
+  threaded: true
+
+paths:
+  base_dir: "your/path/to/ARIN5201-CV-FinalProject"
+  upload_dir: "uploads"
+  output_root: "outputs"
+  infer_script: "inference3d.py"
+  templates_dir: "templates"
+
+python_envs:
+  trellis: "your/path/to/miniconda3/envs/trellis/bin/python"
+  hunyuan3d2: "your/path/to/miniconda3/envs/hunyuan3d2/bin/python"
+
+models:
+  hunyuan3d2:
+    repo_dir: "your/path/to/ARIN5201-CV-FinalProject/Hunyuan3D_2"
+    model_path: "your/path/to/models/Hunyuan3D-2/"
+    defaults:
+      num_inference_steps: 50
+      guidance_scale: 7.5
+      octree_resolution: 384
+      seed: 1234
+      do_rembg_if_rgb: true
+
+  trellis:
+    model_name: "microsoft/TRELLIS-image-large"
+    defaults:
+      seed: 1
+      render_target: "mesh"
+      render_channel: "normal"
+      spconv_algo: "native"
+      texture_size: 1024
+      simplify_ratio: 0.95
+      do_rembg_if_rgb: true
+      sparse_structure_steps: 12
+      sparse_structure_cfg: 7.5
+      slat_steps: 12
+      slat_cfg: 3.0
+
+sse:
+  heartbeat_interval_sec: 5
+
+allowed_extensions:
+  - ".png"
+  - ".jpg"
+  - ".jpeg"
+  - ".webp"

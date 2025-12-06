@@ -8,19 +8,57 @@ import uuid
 import queue
 import shutil
 import signal
+import argparse
 import threading
 import subprocess
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional
 
+import yaml
 from flask import Flask, render_template, request, jsonify, Response, send_file, abort, url_for, redirect
 
-# ---- 基本配置（按你的环境修改） ----
-BASE_DIR = Path(__file__).resolve().parent
-UPLOAD_DIR = BASE_DIR / "uploads"
-OUTPUT_ROOT = BASE_DIR / "outputs"
-INFER_SCRIPT = str(BASE_DIR / "inference3d.py")
+
+def load_config(config_path: str = None) -> Dict[str, Any]:
+    """Load configuration from YAML file."""
+    if config_path is None:
+        config_path = Path(__file__).resolve().parent / "config.yaml"
+    else:
+        config_path = Path(config_path)
+    
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+    
+    return config
+
+
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="Flask 3D Generation Service")
+    parser.add_argument(
+        "--config", "-c",
+        type=str,
+        default=None,
+        help="Path to YAML config file (default: config.yaml in same directory)"
+    )
+    parser.add_argument("--host", type=str, default=None, help="Override server host")
+    parser.add_argument("--port", type=int, default=None, help="Override server port")
+    parser.add_argument("--debug", action="store_true", default=None, help="Enable debug mode")
+    return parser.parse_args()
+
+
+# ---- 加载配置 ----
+args = parse_args()
+CONFIG = load_config(args.config)
+
+# ---- 从配置文件读取基本配置 ----
+BASE_DIR = Path(CONFIG["paths"]["base_dir"]).resolve()
+UPLOAD_DIR = BASE_DIR / CONFIG["paths"]["upload_dir"]
+OUTPUT_ROOT = BASE_DIR / CONFIG["paths"]["output_root"]
+INFER_SCRIPT = str(BASE_DIR / CONFIG["paths"]["infer_script"])
 
 # 临时上传用于 viewer 的 GLB 文件
 UPLOADED_DIR = OUTPUT_ROOT / "viewer_uploads"
@@ -28,15 +66,18 @@ UPLOADED_DIR.mkdir(parents=True, exist_ok=True)
 uploaded_files: Dict[str, str] = {}
 uploaded_files_lock = threading.Lock()
 
-# 目标 Conda 环境中的 Python 可执行路径（务必正确）
-PYTHON_TRELLIS = "/disk2/licheng/miniconda3/envs/trellis/bin/python"
-PYTHON_HY3D2 = "/disk2/licheng/miniconda3/envs/hunyuan3d2/bin/python"
+# 目标 Conda 环境中的 Python 可执行路径
+PYTHON_TRELLIS = CONFIG["python_envs"]["trellis"]
+PYTHON_HY3D2 = CONFIG["python_envs"]["hunyuan3d2"]
 
 # SSE 心跳间隔（秒）
-SSE_HEARTBEAT_SEC = 5
+SSE_HEARTBEAT_SEC = CONFIG["sse"]["heartbeat_interval_sec"]
+
+# 允许的图片扩展名
+ALLOWED_EXTENSIONS = CONFIG.get("allowed_extensions", [".png", ".jpg", ".jpeg", ".webp"])
 
 # 创建 Flask
-app = Flask(__name__, template_folder=str(BASE_DIR / "templates"))
+app = Flask(__name__, template_folder=str(BASE_DIR / CONFIG["paths"]["templates_dir"]))
 
 # 确保目录存在
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -68,7 +109,7 @@ def start_job():
     model = request.form.get("model", "").strip()
     gpu = request.form.get("gpu", "0").strip()               # e.g. "0" 或 "0,1"
     prompt = request.form.get("prompt", "").strip()
-    output_dir_root = "/disk2/licheng/code/ARIN5201-CV-FinalProject/outputs"
+    output_dir_root = str(OUTPUT_ROOT)
     image_file = request.files.get("image")
 
     # 统一输入模式：image/text
@@ -83,8 +124,8 @@ def start_job():
     image_path = None
     if image_file and image_file.filename:
         suffix = Path(image_file.filename).suffix.lower()
-        if suffix not in [".png", ".jpg", ".jpeg", ".webp"]:
-            return Response("仅支持 PNG/JPG/WEBP 格式图片", status=400)
+        if suffix not in ALLOWED_EXTENSIONS:
+            return Response(f"仅支持 {', '.join(ALLOWED_EXTENSIONS)} 格式图片", status=400)
         image_path = str(job_dir / f"input{suffix}")
         image_file.save(image_path)
         input_type = "image"
@@ -101,56 +142,61 @@ def start_job():
     kwargs: Dict[str, Any] = {}
 
     if model == "hunyuan3d-2":
-        hy3dgen_repo = "/disk2/licheng/code/ARIN5201-CV-FinalProject/Hunyuan3D_2"
-        model_path = "/disk2/licheng/models/Hunyuan3D-2/"
+        hy_cfg = CONFIG["models"]["hunyuan3d2"]
+        hy_defaults = hy_cfg["defaults"]
+        hy3dgen_repo = hy_cfg.get("repo_dir", "")
+        model_path = hy_cfg.get("model_path", "")
         
-        # 解析 Hunyuan3D-2 参数
-        hy_num_inference_steps = request.form.get("hy_num_inference_steps", "50").strip()
-        hy_guidance_scale = request.form.get("hy_guidance_scale", "7.5").strip()
-        hy_octree_resolution = request.form.get("hy_octree_resolution", "384").strip()
-        hy_seed = request.form.get("hy_seed", "1234").strip()
+        # 解析 Hunyuan3D-2 参数（优先使用前端传参，否则使用配置默认值）
+        hy_num_inference_steps = request.form.get("hy_num_inference_steps", "").strip()
+        hy_guidance_scale = request.form.get("hy_guidance_scale", "").strip()
+        hy_octree_resolution = request.form.get("hy_octree_resolution", "").strip()
+        hy_seed = request.form.get("hy_seed", "").strip()
         
         kwargs.update({
             "model_path": model_path,
-            "do_rembg_if_rgb": True,
-            "num_inference_steps": int(hy_num_inference_steps) if hy_num_inference_steps else 50,
-            "guidance_scale": float(hy_guidance_scale) if hy_guidance_scale else 7.5,
-            "octree_resolution": int(hy_octree_resolution) if hy_octree_resolution else 384,
-            "seed": int(hy_seed) if hy_seed else 1234,
+            "do_rembg_if_rgb": hy_defaults.get("do_rembg_if_rgb", True),
+            "num_inference_steps": int(hy_num_inference_steps) if hy_num_inference_steps else hy_defaults.get("num_inference_steps", 50),
+            "guidance_scale": float(hy_guidance_scale) if hy_guidance_scale else hy_defaults.get("guidance_scale", 7.5),
+            "octree_resolution": int(hy_octree_resolution) if hy_octree_resolution else hy_defaults.get("octree_resolution", 384),
+            "seed": int(hy_seed) if hy_seed else hy_defaults.get("seed", 1234),
         })
         if hy3dgen_repo:
             kwargs["repo_dir"] = hy3dgen_repo
 
     elif model == "trellis":
-        trellis_model = request.form.get("trellis_model", "microsoft/TRELLIS-image-large").strip()
-        render_target = request.form.get("render_target", "mesh").strip()
-        render_channel = request.form.get("render_channel", "normal").strip()
-        spconv_algo = request.form.get("spconv_algo", "native").strip()
-        texture_size = int(request.form.get("texture_size", "1024"))
-        simplify_ratio = float(request.form.get("simplify_ratio", "0.95"))
+        tr_cfg = CONFIG["models"]["trellis"]
+        tr_defaults = tr_cfg["defaults"]
+        
+        trellis_model = request.form.get("trellis_model", "").strip() or tr_cfg.get("model_name", "microsoft/TRELLIS-image-large")
+        render_target = request.form.get("render_target", "").strip() or tr_defaults.get("render_target", "mesh")
+        render_channel = request.form.get("render_channel", "").strip() or tr_defaults.get("render_channel", "normal")
+        spconv_algo = request.form.get("spconv_algo", "").strip() or tr_defaults.get("spconv_algo", "native")
+        texture_size = int(request.form.get("texture_size", "") or tr_defaults.get("texture_size", 1024))
+        simplify_ratio = float(request.form.get("simplify_ratio", "") or tr_defaults.get("simplify_ratio", 0.95))
         
         # Stage 1: Sparse Structure sampler params
-        ss_sampling_steps = request.form.get("ss_sampling_steps", "12").strip()
-        ss_guidance_strength = request.form.get("ss_guidance_strength", "7.5").strip()
+        ss_sampling_steps = request.form.get("ss_sampling_steps", "").strip()
+        ss_guidance_strength = request.form.get("ss_guidance_strength", "").strip()
         # Stage 2: Structured Latent sampler params
-        slat_sampling_steps = request.form.get("slat_sampling_steps", "12").strip()
-        slat_guidance_strength = request.form.get("slat_guidance_strength", "3.0").strip()
+        slat_sampling_steps = request.form.get("slat_sampling_steps", "").strip()
+        slat_guidance_strength = request.form.get("slat_guidance_strength", "").strip()
         
         kwargs.update({
-            "seed": 1,
+            "seed": tr_defaults.get("seed", 1),
             "trellis_model": trellis_model,
             "render_target": render_target,
             "render_channel": render_channel,
             "spconv_algo": spconv_algo,
             "texture_size": texture_size,
             "simplify_ratio": simplify_ratio,
-            "do_rembg_if_rgb": True,
+            "do_rembg_if_rgb": tr_defaults.get("do_rembg_if_rgb", True),
             # Sparse structure sampler
-            "sparse_structure_steps": int(ss_sampling_steps) if ss_sampling_steps else None,
-            "sparse_structure_cfg": float(ss_guidance_strength) if ss_guidance_strength else None,
+            "sparse_structure_steps": int(ss_sampling_steps) if ss_sampling_steps else tr_defaults.get("sparse_structure_steps"),
+            "sparse_structure_cfg": float(ss_guidance_strength) if ss_guidance_strength else tr_defaults.get("sparse_structure_cfg"),
             # Structured latent sampler
-            "slat_steps": int(slat_sampling_steps) if slat_sampling_steps else None,
-            "slat_cfg": float(slat_guidance_strength) if slat_guidance_strength else None,
+            "slat_steps": int(slat_sampling_steps) if slat_sampling_steps else tr_defaults.get("slat_steps"),
+            "slat_cfg": float(slat_guidance_strength) if slat_guidance_strength else tr_defaults.get("slat_cfg"),
         })
     else:
         return Response("无效的模型选择", status=400)
@@ -628,5 +674,17 @@ def analyze_glb(path: str) -> Dict[str, Any]:
 
 # ---- 启动 ----
 if __name__ == "__main__":
+    # 从配置文件和命令行参数获取服务器设置
+    server_cfg = CONFIG.get("server", {})
+    
+    # 命令行参数优先级高于配置文件
+    host = args.host if args.host is not None else server_cfg.get("host", "0.0.0.0")
+    port = args.port if args.port is not None else server_cfg.get("port", 5000)
+    debug = args.debug if args.debug is not None else server_cfg.get("debug", False)
+    threaded = server_cfg.get("threaded", True)
+    
+    print(f"Starting server with config: host={host}, port={port}, debug={debug}")
+    print(f"Config file: {args.config or 'config.yaml (default)'}")
+    
     # 生产部署可用 gunicorn 等，这里简单跑开发服务
-    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+    app.run(host=host, port=port, debug=debug, threaded=threaded)
