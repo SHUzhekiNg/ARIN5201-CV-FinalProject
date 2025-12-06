@@ -1,41 +1,5 @@
 # 3D Assets Generator
 
-## Requirements
-- Input: A text prompt OR a single 2D image
-
-- Output: A 3D model file (.obj, .glb, .fbx) with textures
-
-- Core Methodology: Implement at least one modern 3D generation technique (e.g., Diffusion Models, NeRFs, 3D Gaussians)
-
-- Evaluation: Final report with quantitative and qualitative analysis
-
-## Expected Outcomes
-A successful project will deliver a complete pipeline and report demonstrating:
-
-- **Geometric Quality**: Accuracy and structure of 3D shape using metrics like **Hausdorff Distance**
-
-- **Visual Fidelity**: Realism and quality of applied textures and materials
-
-- **Semantic Consistency**: Alignment between generated 3D model and input content
-
-## Implementation Steps
-1. Select a base model and 3D representation approach
-
-2. Preprocess input data and set up training pipeline
-
-3. Implement chosen generation technique with optimization
-
-4. Generate 3D assets and evaluate using specified metrics
-
-
-## Tips
-- Use clear, well-lit images with simple backgrounds for image inputs
-
-- Employ specific prompts describing materials, style, and proportions for text inputs
-
-- Plan for post-processing in software like Blender for optimal quality
-
-
 
 # TODOs:
 
@@ -83,3 +47,91 @@ and do preprocessing following https://github.com/microsoft/TRELLIS/blob/main/DA
 
 
 # Evaluation
+
+We provide a comprehensive evaluation suite to assess the quality of generated 3D models. The evaluation is divided into two main categories: **Reference-based** (Geometric Quality) and **Reference-free** (Semantic & Visual Quality).
+
+## Metrics
+
+### 1. Geometric Quality (Reference-based)
+- **Hausdorff Distance**: Measures the maximum distance between a point on the generated mesh and the nearest point on the ground truth mesh. Lower is better.
+  - **Script**: `hausdorff_eval.py`
+  - **Usage**: Compares a generated `.glb` against a ground truth `.ply`.
+
+### 2. Semantic & Visual Quality (Reference-free)
+- **CLIP Score**: Measures the semantic alignment between the input (text/image) and the rendered views of the generated 3D model. Higher is better.
+- **Aesthetic Score**: Evaluates the visual appeal of the rendered views using a pre-trained aesthetic predictor.
+- **Multi-view Consistency**: Measures the structural coherence of the 3D model across different viewpoints.
+- **Mesh Validity**: Checks for geometric integrity (watertightness, manifoldness, self-intersections).
+  - **Script**: `evaluate.py`
+
+## Usage
+
+### Unified Evaluator (`evaluate.py`)
+This script runs a battery of reference-free metrics including CLIP Score, Aesthetic Score, and Mesh Validity.
+
+```bash
+# Evaluate a single model
+python evaluate.py --model_path path/to/model.glb --prompt "a red car" --output_dir results/
+
+# Evaluate a directory of models
+python evaluate.py --model_dir path/to/models/ --prompt_file prompts.json --output_dir results/
+```
+
+### Hausdorff Distance Evaluator (`hausdorff_eval.py`)
+This script computes the symmetric Hausdorff distance between a prediction and a ground truth mesh.
+
+```bash
+python hausdorff_eval.py --pred path/to/pred.glb --gt path/to/gt.ply --output results.json
+```
+
+### Ablation Studies
+For TRELLIS specific ablation studies, we provide specialized scripts:
+
+- **Geometric Evaluation**: `TRELLIS/ablation_trellis_evaluate.py`
+- **CLIP Score Evaluation**: `TRELLIS/ablation_trellis_clip_evaluate.py`
+
+```bash
+# Run geometric ablation evaluation
+python TRELLIS/ablation_trellis_evaluate.py --results_dir outputs/ablation --gt_dir datasets/Toys4k/
+
+# Run CLIP score ablation evaluation
+python TRELLIS/ablation_trellis_clip_evaluate.py --results_dir outputs/ablation --metadata datasets/Toys4k/metadata.csv
+```
+
+# PostProcessing
+
+We provide a Blender-based post-processing module to clean up and optimize the generated 3D meshes. This module handles mesh cleanup, geometry repair, and topology optimization.
+
+## Features
+- **Mesh Cleanup**: Removes duplicate vertices, loose geometry, and degenerate faces.
+- **Geometry Repair**: Fixes normal directions, non-manifold edges, and fills holes.
+- **Topology Optimization**: Simplifies mesh (Decimate) and applies surface smoothing.
+
+## Usage
+
+**Note**: This script requires Blender 3.0+ to be installed and accessible via the `blender` command.
+
+### Single File
+```bash
+blender --background --python PostProcessing/PostProcessing.py -- --input model.glb --output processed.glb
+```
+
+### Batch Processing
+```bash
+blender --background --python PostProcessing/PostProcessing.py -- --batch --input ./models/ --output ./output/
+```
+
+### Advanced Options
+You can tune the optimization parameters:
+
+- `--merge-distance`: Threshold for merging vertices (default: 0.0001)
+- `--decimate-ratio`: Ratio for mesh simplification (0-1, default: 0.8)
+- `--smooth-iterations`: Number of smoothing iterations (default: 5)
+- `--no-smooth`: Disable smoothing
+- `--no-decimate`: Disable decimation
+
+**Example for conservative optimization (recommended for TRELLIS):**
+```bash
+blender --background --python PostProcessing/PostProcessing.py -- --batch --input TRELLIS_output --output post_processed --merge-distance 0.00001 --no-smooth --no-decimate
+```
+
